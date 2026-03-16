@@ -1,3 +1,4 @@
+
 <!DOCTYPE html>
 <html lang="pt-BR">
 <head>
@@ -21,6 +22,199 @@ const firebaseConfig = {
 };
 firebase.initializeApp(firebaseConfig);
 const db = firebase.firestore();
+
+
+// ==================== SISTEMA DE LOGIN ====================
+// Usuários: { login, displayName, role, shortName, passwordHash }
+// Senhas hasheadas com SHA-256 (geradas abaixo — troque aqui para alterar)
+// Para gerar novo hash: btoa(String.fromCharCode(...new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode('suasenha')))))
+
+// ==================== LISTA DE USUÁRIOS ====================
+// Senhas são definidas por cada pessoa no primeiro acesso
+// e armazenadas no Firestore (criptografadas com SHA-256)
+// Para resetar a senha de alguém: gestor usa o painel de presença
+const USUARIOS = [
+  // GESTOR (Bruno Peres Rossoni acumula gestor + advogado)
+  { login: 'bruno',     displayName: 'Bruno Peres Rossoni',         role: 'gestor',     shortName: 'Bruno'    },
+  // ADVOGADOS
+  { login: 'douglas',   displayName: 'Douglas Leandro da Silva',    role: 'advogado',   shortName: 'Douglas'  },
+  { login: 'fernando',  displayName: 'Fernando de Gonzalez e Silva', role: 'advogado',  shortName: 'Fernando' },
+  { login: 'janaina',   displayName: 'Janaina Minetto',             role: 'advogado',   shortName: 'Janaina'  },
+  { login: 'stalin',    displayName: 'Stalin de Lima Lauser',       role: 'advogado',   shortName: 'Stalin'   },
+  { login: 'vitoria',   displayName: 'Vitoria Dei Ricardi Weber',   role: 'advogado',   shortName: 'Vitoria'  },
+  // ADVOGADOS (CX / dupla)
+  { login: 'alice',     displayName: 'Alice Ribeiro da Silva',      role: 'advogado',   shortName: 'Alice'    },
+  { login: 'camila',    displayName: 'Camila Oliveira Carregosa',   role: 'advogado',   shortName: 'Camila'   },
+  { login: 'adriane',   displayName: 'Adriane Viegas Martinez Cardoso', role: 'advogado', shortName: 'Adriane' },
+  { login: 'franciele', displayName: 'Franciele Vitória Flach',     role: 'advogado',   shortName: 'Franciele'},
+  { login: 'larissa',   displayName: 'Larissa Bassan Suello Gonda', role: 'advogado',   shortName: 'Larissa'  },
+  { login: 'bibiana',   displayName: 'Bibiana das Virgens de Castilhos', role: 'advogado', shortName: 'Bibiana' },
+  // ESTAGIÁRIOS
+  { login: 'julia',     displayName: 'Julia (Estagiária)',          role: 'estagiario', shortName: 'Julia'    },
+  { login: 'matheus',   displayName: 'Matheus (Estagiário)',        role: 'estagiario', shortName: 'Matheus'  },
+];
+
+// Usuário da sessão atual
+let _currentUser = null;
+// Cache de hashes de senhas carregado do Firestore
+let _senhasCache = {};
+
+// ── HASH SHA-256 ─────────────────────────────────────────────────
+async function _sha256(str) {
+  const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(str));
+  return Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2,'0')).join('');
+}
+
+// ── CARREGA SENHAS DO FIRESTORE ──────────────────────────────────
+async function _carregarSenhas() {
+  try {
+    const doc = await db.collection('sistema').doc('senhas').get();
+    if(doc.exists) _senhasCache = doc.data() || {};
+  } catch {}
+}
+
+// ── VERIFICA SE USUÁRIO TEM SENHA DEFINIDA ───────────────────────
+function _temSenha(login) {
+  return !!_senhasCache[login];
+}
+
+// ── SALVA NOVA SENHA NO FIRESTORE ────────────────────────────────
+async function _salvarSenha(login, hash) {
+  _senhasCache[login] = hash;
+  if(_firestoreReady) {
+    await db.collection('sistema').doc('senhas').set({ [login]: hash }, { merge: true });
+  }
+}
+
+// ── SESSÃO LOCAL ─────────────────────────────────────────────────
+function _verificarSessaoSalva() {
+  try {
+    const raw = localStorage.getItem('lpdb_session');
+    if(!raw) return false;
+    const s = JSON.parse(raw);
+    if(!s.login || !s.ts) return false;
+    // Sessão expira em 12 horas
+    if(Date.now() - s.ts > 12 * 60 * 60 * 1000) { localStorage.removeItem('lpdb_session'); return false; }
+    const user = USUARIOS.find(u => u.login === s.login);
+    if(!user) return false;
+    _currentUser = user;
+    return true;
+  } catch { return false; }
+}
+function _salvarSessao(user) {
+  try { localStorage.setItem('lpdb_session', JSON.stringify({ login: user.login, ts: Date.now() })); } catch {}
+}
+function _mostrarBadge(user) {
+  const badge = document.getElementById('logged-user-badge');
+  const nameEl = document.getElementById('logged-user-name');
+  if(badge && nameEl) { nameEl.textContent = user.displayName.split(' ')[0]; badge.style.display = 'flex'; }
+}
+
+// ── FLUXO DE LOGIN ───────────────────────────────────────────────
+// Mostra a tela correta conforme usuário selecionado
+function aoSelecionarUsuario() {
+  const login = document.getElementById('login-user').value;
+  const user = USUARIOS.find(u => u.login === login);
+  if(!user) return;
+  const temSenha = _temSenha(login);
+  // Muda placeholder e label conforme primeiro acesso ou não
+  document.getElementById('login-pass-label').textContent = temSenha ? 'Senha' : 'Criar senha (primeiro acesso)';
+  document.getElementById('login-pass2-row').style.display = temSenha ? 'none' : 'block';
+  document.getElementById('login-btn-text').textContent = temSenha ? 'Entrar →' : 'Cadastrar senha e entrar →';
+  document.getElementById('login-err').style.display = 'none';
+}
+
+async function tentarLogin() {
+  const login    = document.getElementById('login-user').value;
+  const pass     = document.getElementById('login-pass').value;
+  const pass2    = document.getElementById('login-pass2').value;
+  const errEl    = document.getElementById('login-err');
+  const btn      = document.getElementById('login-btn');
+
+  const user = USUARIOS.find(u => u.login === login);
+  if(!user) { errEl.textContent = 'Selecione um usuário.'; errEl.style.display = 'block'; return; }
+  if(!pass)  { errEl.textContent = 'Digite sua senha.'; errEl.style.display = 'block'; return; }
+
+  btn.disabled = true; btn.textContent = 'Aguarde...';
+  errEl.style.display = 'none';
+
+  const hash = await _sha256(pass);
+
+  if(!_temSenha(login)) {
+    // PRIMEIRO ACESSO — cadastrar senha
+    if(pass.length < 6) {
+      errEl.textContent = 'Senha deve ter pelo menos 6 caracteres.'; errEl.style.display = 'block';
+      btn.disabled = false; btn.textContent = 'Cadastrar senha e entrar →'; return;
+    }
+    if(pass !== pass2) {
+      errEl.textContent = 'As senhas não coincidem.'; errEl.style.display = 'block';
+      btn.disabled = false; btn.textContent = 'Cadastrar senha e entrar →'; return;
+    }
+    await _salvarSenha(login, hash);
+    notify('✅ Senha criada com sucesso!');
+  } else {
+    // LOGIN NORMAL — verificar senha
+    if(_senhasCache[login] !== hash) {
+      // Registra tentativa falha
+      if(_firestoreReady) db.collection('sistema').doc('login_log').set(
+        { ['falha_' + Date.now()]: { login, ts: new Date().toISOString() } }, { merge: true }).catch(()=>{});
+      errEl.textContent = 'Senha incorreta.'; errEl.style.display = 'block';
+      document.getElementById('login-pass').value = '';
+      btn.disabled = false; btn.textContent = 'Entrar →'; return;
+    }
+  }
+
+  // ── LOGIN OK ──
+  _currentUser = user;
+  _salvarSessao(user);
+  _mostrarBadge(user);
+  document.getElementById('login-screen').classList.add('hidden');
+  _registrarAcesso(user);
+  btn.disabled = false; btn.textContent = 'Entrar →';
+  if(!_appIniciado) { await _init(); }
+}
+
+function fazerLogout() {
+  try { localStorage.removeItem('lpdb_session'); } catch {}
+  _currentUser = null;
+  document.getElementById('login-user').value = '';
+  document.getElementById('login-pass').value = '';
+  document.getElementById('login-pass2').value = '';
+  document.getElementById('login-err').style.display = 'none';
+  document.getElementById('login-pass2-row').style.display = 'none';
+  document.getElementById('login-pass-label').textContent = 'Senha';
+  document.getElementById('login-btn-text').textContent = 'Entrar →';
+  document.getElementById('login-screen').classList.remove('hidden');
+  document.getElementById('logged-user-badge').style.display = 'none';
+}
+
+// ── RESET DE SENHA PELO GESTOR ───────────────────────────────────
+async function resetarSenha(login) {
+  if(!confirm('Resetar a senha de ' + login + '? Na próxima vez que acessar, terá que criar uma nova.')) return;
+  delete _senhasCache[login];
+  if(_firestoreReady) {
+    // Remove o campo usando FieldValue.delete() via set com merge não funciona para deletar
+    // Então reescrevemos o doc sem o login em questão
+    const doc = await db.collection('sistema').doc('senhas').get();
+    const dados = doc.exists ? doc.data() : {};
+    delete dados[login];
+    await db.collection('sistema').doc('senhas').set(dados);
+  }
+  notify('🔑 Senha de ' + login + ' resetada. Próximo acesso criará nova senha.');
+}
+
+function _registrarAcesso(user) {
+  const agora = new Date().toISOString();
+  if(_firestoreReady) {
+    const chave = 'ac_' + user.login + '_' + agora.replace(/[:.]/g,'');
+    db.collection('sistema').doc('acessos').set({ [chave]: { login: user.login, nome: user.displayName, role: user.role, ts: agora } }, { merge: true }).catch(()=>{});
+    db.collection('sistema').doc('ultimo_acesso').set({ [user.login]: { nome: user.displayName, role: user.role, ts: agora } }, { merge: true }).catch(()=>{});
+  }
+  addActivityLog({ type: 'sessao', pasta: '', nome: user.displayName, resp: user.shortName, fase: '→ Login' });
+}
+
+// Inicialização com controle de login
+let _appIniciado = false;
 
 // Cache local para leituras síncronas (Firestore é async)
 const _stateCache = {};
@@ -158,6 +352,44 @@ body { font-family: "DM Sans", sans-serif; background: var(--bg); color: var(--t
 .tab-btn:hover:not(.active) { background: rgba(255,255,255,0.18); color: #fff; }
 .theme-toggle { width: 36px; height: 36px; border: 1px solid rgba(255,255,255,0.3); background: rgba(255,255,255,0.1); border-radius: 8px; cursor: pointer; display: flex; align-items: center; justify-content: center; font-size: 16px; transition: var(--transition); }
 .theme-toggle:hover { background: rgba(255,255,255,0.2); }
+
+/* ── LOGIN ─────────────────────────────────────────────────────── */
+#login-screen {
+  position: fixed; inset: 0; z-index: 99999;
+  background: var(--accent);
+  display: flex; align-items: center; justify-content: center;
+  font-family: "DM Sans", sans-serif;
+}
+#login-screen.hidden { display: none; }
+.login-box {
+  background: var(--surface); border-radius: 18px;
+  box-shadow: 0 24px 64px rgba(0,0,0,0.35);
+  padding: 40px 44px; width: 100%; max-width: 400px;
+}
+.login-logo { display: flex; align-items: center; gap: 14px; margin-bottom: 28px; }
+.login-logo-icon { width: 48px; height: 48px; background: var(--accent); border-radius: 10px;
+  display: flex; align-items: center; justify-content: center;
+  font-family: "DM Serif Display"; font-size: 18px; color: #fff; }
+.login-logo-text { font-family: "DM Serif Display"; font-size: 20px; color: var(--text); line-height: 1.2; }
+.login-logo-sub { font-size: 12px; color: var(--text3); }
+.login-field { margin-bottom: 16px; }
+.login-label { font-size: 11px; font-weight: 600; color: var(--text3); text-transform: uppercase;
+  letter-spacing: .06em; margin-bottom: 6px; }
+.login-input { width: 100%; padding: 11px 14px; border: 1.5px solid var(--border);
+  border-radius: 8px; font-size: 14px; font-family: "DM Sans"; background: var(--bg);
+  color: var(--text); transition: border-color .2s; outline: none; box-sizing: border-box; }
+.login-input:focus { border-color: var(--accent); }
+.login-btn { width: 100%; padding: 13px; background: var(--accent); color: #fff; border: none;
+  border-radius: 8px; font-size: 14px; font-weight: 600; font-family: "DM Sans";
+  cursor: pointer; transition: opacity .2s; margin-top: 4px; }
+.login-btn:hover { opacity: .88; }
+.login-err { color: var(--red); font-size: 12px; margin-top: 10px; display: none; text-align: center; }
+#logged-user-badge {
+  display: none; align-items: center; gap: 8px;
+  background: rgba(255,255,255,0.15); border-radius: 20px;
+  padding: 4px 12px 4px 8px; font-size: 12px; color: #fff;
+}
+#logged-user-badge .badge-dot { width: 8px; height: 8px; background: #4caf78; border-radius: 50%; }
 
 .main { padding: 24px 32px; max-width: 1600px; margin: 0 auto; }
 
@@ -473,6 +705,60 @@ body { font-family: "DM Sans", sans-serif; background: var(--bg); color: var(--t
 </head>
 <body>
 
+<!-- TELA DE LOGIN -->
+<div id="login-screen">
+  <div class="login-box">
+    <div class="login-logo">
+      <div class="login-logo-icon">LP</div>
+      <div>
+        <div class="login-logo-text">LPDB Advogados</div>
+        <div class="login-logo-sub">Projeto Iniciais 2026 — Acesso restrito</div>
+      </div>
+    </div>
+    <div class="login-field">
+      <div class="login-label">Quem é você?</div>
+      <select class="login-input" id="login-user" onchange="aoSelecionarUsuario()" style="cursor:pointer;">
+        <option value="">— Selecione seu nome —</option>
+        <optgroup label="⚖️ Advogados">
+          <option value="bruno">Bruno Peres Rossoni</option>
+          <option value="douglas">Douglas Leandro da Silva</option>
+          <option value="fernando">Fernando de Gonzalez e Silva</option>
+          <option value="janaina">Janaina Minetto</option>
+          <option value="stalin">Stalin de Lima Lauser</option>
+          <option value="vitoria">Vitoria Dei Ricardi Weber</option>
+        </optgroup>
+        <optgroup label="👤 Advogados (dupla)">
+          <option value="alice">Alice Ribeiro da Silva</option>
+          <option value="camila">Camila Oliveira Carregosa</option>
+          <option value="adriane">Adriane Viegas Martinez Cardoso</option>
+          <option value="franciele">Franciele Vitória Flach</option>
+          <option value="larissa">Larissa Bassan Suello Gonda</option>
+          <option value="bibiana">Bibiana das Virgens de Castilhos</option>
+        </optgroup>
+        <optgroup label="📋 Estagiários">
+          <option value="julia">Julia (Estagiária)</option>
+          <option value="matheus">Matheus (Estagiário)</option>
+        </optgroup>
+      </select>
+    </div>
+    <div class="login-field">
+      <div class="login-label" id="login-pass-label">Senha</div>
+      <input class="login-input" id="login-pass" type="password" placeholder="••••••••"
+        autocomplete="current-password"
+        onkeydown="if(event.key==='Enter'){ const r=document.getElementById('login-pass2-row'); if(r.style.display!=='none') document.getElementById('login-pass2').focus(); else tentarLogin(); }">
+    </div>
+    <div id="login-pass2-row" style="display:none;" class="login-field">
+      <div class="login-label">Confirmar senha</div>
+      <input class="login-input" id="login-pass2" type="password" placeholder="••••••••"
+        autocomplete="new-password"
+        onkeydown="if(event.key==='Enter')tentarLogin()">
+      <div style="font-size:11px;color:var(--text3);margin-top:5px;">✨ Primeiro acesso — crie sua senha pessoal (mín. 6 caracteres)</div>
+    </div>
+    <button class="login-btn" id="login-btn" onclick="tentarLogin()"><span id="login-btn-text">Entrar →</span></button>
+    <div class="login-err" id="login-err"></div>
+  </div>
+</div>
+
 <div class="app-header">
   <div class="logo">
     <div class="logo-icon">LP</div>
@@ -491,8 +777,14 @@ body { font-family: "DM Sans", sans-serif; background: var(--bg); color: var(--t
       <button class="tab-btn" onclick="showPage('ranking',this)">🏆 Ranking</button>
       <button class="tab-btn" onclick="showPage('importar',this)" style="background:rgba(76,175,120,0.25);color:rgba(255,255,255,0.95);">⬆ Importar</button>
       <button class="tab-btn" onclick="showPage('exportar',this)" style="background:rgba(232,168,0,0.25);color:rgba(255,255,255,0.95);">⬇ Exportar</button>
+      <button class="tab-btn" id="btn-relatorio" onclick="openRelatorio()" style="background:rgba(255,255,255,0.08);color:rgba(255,255,255,0.4);font-size:11px;" title="Relatório / Presença">📊</button>
     </div>
     <button class="theme-toggle" onclick="toggleTheme()" title="Modo escuro/claro">🌙</button>
+    <div id="logged-user-badge">
+      <div class="badge-dot"></div>
+      <span id="logged-user-name">—</span>
+      <button onclick="fazerLogout()" title="Sair" style="background:rgba(255,255,255,0.2);border:none;color:#fff;border-radius:12px;padding:2px 8px;font-size:11px;cursor:pointer;margin-left:4px;">Sair</button>
+    </div>
   </div>
 </div>
 
@@ -541,6 +833,15 @@ body { font-family: "DM Sans", sans-serif; background: var(--bg); color: var(--t
     <div class="activity-body" id="activity-body">
       <div class="activity-empty" id="activity-empty">Nenhuma movimentação registrada. As mudanças de fase aparecem aqui em tempo real.</div>
     </div>
+  </div>
+
+  <!-- Painel de Presença — visível apenas com senha do gestor -->
+  <div id="presence-panel" style="display:none;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);box-shadow:var(--shadow);overflow:hidden;margin-bottom:28px;">
+    <div style="background:var(--accent);padding:12px 20px;display:flex;align-items:center;justify-content:space-between;">
+      <div style="color:#fff;font-weight:600;font-size:14px;">👁️ Presença no Sistema <span style="font-size:11px;font-weight:400;opacity:.7;">— últimos acessos e atividades</span></div>
+      <button onclick="closePresence()" style="background:rgba(255,255,255,0.15);border:none;color:#fff;border-radius:6px;padding:3px 10px;cursor:pointer;font-size:12px;">✕ Fechar</button>
+    </div>
+    <div id="presence-body" style="padding:16px 20px;display:grid;grid-template-columns:repeat(3,1fr);gap:12px;"></div>
   </div>
 
   <!-- Tabela por Responsável -->
@@ -615,6 +916,11 @@ body { font-family: "DM Sans", sans-serif; background: var(--bg); color: var(--t
       </optgroup>
     </select>
     <input class="search-input" style="max-width:260px;" placeholder="Buscar cliente ou nº pasta..." id="kanban-search" oninput="renderKanban()">
+    <select class="filter-select" id="kanban-sort" onchange="renderKanban()" title="Ordenar cards">
+      <option value="">Ordenação padrão</option>
+      <option value="dias_desc">⬇ Mais parado primeiro (dias)</option>
+      <option value="dias_asc">⬆ Menos parado primeiro (dias)</option>
+    </select>
   </div>
   <div class="kanban-wrapper">
     <div class="kanban-board" id="kanban-board"></div>
@@ -844,6 +1150,80 @@ body { font-family: "DM Sans", sans-serif; background: var(--bg); color: var(--t
 </div>
 
 </div><!-- /main -->
+
+<!-- MODAL SENHA PRESENÇA -->
+<div class="modal-overlay" id="presence-auth-modal" style="display:none;align-items:center;justify-content:center;">
+  <div class="modal" style="max-width:400px;">
+    <div class="modal-header" style="background:var(--accent);">
+      <div><div class="modal-title" style="color:#fff;">👁️ Painel de Presença</div>
+        <div class="modal-subtitle-h" style="color:rgba(255,255,255,0.7);">Acesso restrito ao gestor</div></div>
+      <button class="modal-close" onclick="document.getElementById('presence-auth-modal').style.display='none'">✕</button>
+    </div>
+    <div class="modal-body" style="padding:28px 24px;">
+      <p style="font-size:13px;color:var(--text2);margin-bottom:18px;">Digite a senha do gestor para ver o painel de presença.</p>
+      <div style="display:flex;gap:10px;">
+        <input type="password" id="presence-senha" class="field-input" placeholder="Senha do gestor" style="flex:1;"
+          onkeydown="if(event.key==='Enter')verificarSenhaPresenca()">
+        <button class="btn btn-primary" onclick="verificarSenhaPresenca()">Entrar</button>
+      </div>
+      <div id="presence-senha-erro" style="color:var(--red);font-size:12px;margin-top:8px;display:none;">Senha incorreta.</div>
+    </div>
+  </div>
+</div>
+
+<!-- RELATÓRIO GESTOR MODAL -->
+<div class="modal-overlay" id="relatorio-modal" style="display:none;align-items:center;justify-content:center;">
+  <div class="modal" style="max-width:480px;">
+    <div class="modal-header" style="background:var(--accent);">
+      <div><div class="modal-title" style="color:#fff;">📊 Relatório do Gestor</div>
+        <div class="modal-subtitle-h" style="color:rgba(255,255,255,0.7);">Acesso restrito</div></div>
+      <button class="modal-close" onclick="closeRelatorio()">✕</button>
+    </div>
+    <div class="modal-body" style="padding:28px 24px;" id="relatorio-body">
+      <div id="rel-login-view">
+        <p style="font-size:13px;color:var(--text2);margin-bottom:18px;">Digite a senha para gerar o relatório de atividades por responsável.</p>
+        <div style="display:flex;gap:10px;align-items:center;">
+          <input type="password" id="rel-senha" class="field-input" placeholder="Senha do gestor" style="flex:1;"
+            onkeydown="if(event.key==='Enter')verificarSenhaRel()">
+          <button class="btn btn-primary" onclick="verificarSenhaRel()">Entrar</button>
+        </div>
+        <div id="rel-senha-erro" style="color:var(--red);font-size:12px;margin-top:8px;display:none;">Senha incorreta.</div>
+      </div>
+      <div id="rel-gen-view" style="display:none;">
+        <p style="font-size:13px;color:var(--text2);margin-bottom:16px;">Selecione o período e os dados a incluir no relatório.</p>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:16px;">
+          <div class="field-group" style="margin:0;"><div class="field-label">De</div>
+            <input type="date" class="field-input" id="rel-data-ini"></div>
+          <div class="field-group" style="margin:0;"><div class="field-label">Até</div>
+            <input type="date" class="field-input" id="rel-data-fim"></div>
+        </div>
+        <div style="display:flex;flex-direction:column;gap:8px;margin-bottom:20px;font-size:13px;">
+          <label style="display:flex;align-items:center;gap:8px;cursor:pointer;"><input type="checkbox" id="rel-chk-status" checked> Status e etapas por pasta</label>
+          <label style="display:flex;align-items:center;gap:8px;cursor:pointer;"><input type="checkbox" id="rel-chk-actlog" checked> Log de atividades</label>
+          <label style="display:flex;align-items:center;gap:8px;cursor:pointer;"><input type="checkbox" id="rel-chk-delegacao" checked> Delegações ativas</label>
+          <label style="display:flex;align-items:center;gap:8px;cursor:pointer;"><input type="checkbox" id="rel-chk-incom" checked> Incomunicáveis</label>
+        </div>
+        <button class="btn btn-primary" style="width:100%;padding:12px;" onclick="gerarRelatorio()">⬇ Gerar e Baixar Relatório (.xlsx)</button>
+        <div id="rel-progress" style="display:none;text-align:center;margin-top:12px;font-size:12px;color:var(--text3);">Gerando relatório...</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- BANNER DE ALERTA DE INATIVIDADE -->
+<div id="alert-banner" style="display:none;position:fixed;bottom:80px;right:24px;z-index:4000;max-width:340px;background:var(--accent);color:#fff;border-radius:12px;box-shadow:0 8px 32px rgba(26,74,138,0.35);padding:0;overflow:hidden;">
+  <div style="background:var(--accent2);padding:10px 16px;display:flex;align-items:center;justify-content:space-between;">
+    <span style="font-weight:700;font-size:13px;">⚠️ Lembrete do Sistema</span>
+    <button onclick="dismissAlert()" style="background:none;border:none;color:#fff;font-size:16px;cursor:pointer;line-height:1;">✕</button>
+  </div>
+  <div style="padding:14px 16px;">
+    <div id="alert-msg" style="font-size:13px;line-height:1.5;margin-bottom:12px;"></div>
+    <div style="display:flex;gap:8px;">
+      <button onclick="dismissAlert()" style="flex:1;background:rgba(255,255,255,0.15);border:1px solid rgba(255,255,255,0.3);color:#fff;border-radius:6px;padding:6px;font-size:12px;cursor:pointer;">Lembrar depois</button>
+      <button onclick="dismissAlertToday();showPage('incomunicaveis',null)" style="flex:1;background:#fff;color:var(--accent);border:none;border-radius:6px;padding:6px;font-size:12px;font-weight:600;cursor:pointer;">Ir trabalhar →</button>
+    </div>
+  </div>
+</div>
 
 <!-- CHECKLIST MODAL -->
 <div class="modal-overlay" id="checklist-modal">
@@ -1544,8 +1924,13 @@ function renderKanban() {
     }
   }
 
+  const sortMode = document.getElementById('kanban-sort').value;
+
   let html = '';
   for(const [key, col] of Object.entries(columns)) {
+    // Aplica ordenação por dias
+    if(sortMode === 'dias_desc') col.clients.sort((a,b) => (b.dias||0) - (a.dias||0));
+    else if(sortMode === 'dias_asc') col.clients.sort((a,b) => (a.dias||0) - (b.dias||0));
     html += `<div class="kanban-col">
       <div class="col-header ${col.cls}">
         <span class="col-header-title">${col.title}</span>
@@ -3036,6 +3421,518 @@ function renderCXPairsPreview() {
     </div>`
   ).join('');
 }
+// ==================== PRESENÇA & ALERTAS ====================
+const INACTIVITY_DAYS = 2; // dias sem atividade para disparar alerta
+const SESSION_KEY = 'lpdb_last_session';
+
+// Registra sessão atual no Firestore e localStorage
+function registrarSessao() {
+  // Com login, usamos _registrarAcesso — esta função fica como fallback
+  if(_currentUser) return; // já registrado no login
+  const agora = new Date().toISOString();
+  try { localStorage.setItem(SESSION_KEY, agora); } catch {}
+}
+
+// ── CÁLCULO DE PRESENÇA ──────────────────────────────────────────
+function calcularPresenca() {
+  const log = _logCache.entries || [];
+  const ultima = {}, contagem = {};
+  const hoje = new Date().toISOString().split('T')[0];
+  for(const item of log) {
+    if(!item.resp || !item.ts) continue;
+    if(!ultima[item.resp] || item.ts > ultima[item.resp]) ultima[item.resp] = item.ts;
+    if(item.ts.split('T')[0] === hoje) contagem[item.resp] = (contagem[item.resp]||0) + 1;
+  }
+  return { ultima, contagem };
+}
+
+// ── DETECTA RESPONSÁVEL DA SESSÃO ATUAL ─────────────────────────
+function detectarRespAtual() {
+  // Com login, usa o usuário logado diretamente
+  if(_currentUser) return _currentUser.shortName;
+  // Fallback: detecta pelo log (para compatibilidade)
+  const log = _logCache.entries || [];
+  const counts = {};
+  const limite = new Date(); limite.setDate(limite.getDate() - 14);
+  for(const item of log) {
+    if(!item.resp || !item.ts) continue;
+    if(new Date(item.ts) < limite) continue;
+    counts[item.resp] = (counts[item.resp]||0) + 1;
+  }
+  return Object.entries(counts).sort((a,b)=>b[1]-a[1])[0]?.[0] || null;
+}
+
+// ── CALCULA GATILHOS PARA UM RESPONSÁVEL ────────────────────────
+function calcularGatilhos(respShort) {
+  const log = _logCache.entries || [];
+  const DONE = ['ajuizado','incomunicavel','encerrado','reativado'];
+  const entry = Object.entries(KANBAN_DATA.responsaveis).find(([k]) => k.split(' ')[0] === respShort);
+  const rdata = entry?.[1];
+  const ultAcao = log.filter(i=>i.resp===respShort&&i.ts).map(i=>i.ts).sort().reverse()[0];
+  const diasSemAtividade = ultAcao ? Math.floor((Date.now()-new Date(ultAcao))/(1000*60*60*24)) : 999;
+  const aguardando = rdata
+    ? rdata.sections.aguardando_ajuizamento.filter(c => !DONE.includes(getClientState(c.pasta).status||'')).length : 0;
+  const semanaAtras = new Date(); semanaAtras.setDate(semanaAtras.getDate()-7);
+  const etapasNaSemana = log.filter(i =>
+    i.resp===respShort && i.type==='contato' && i.ts && new Date(i.ts) > semanaAtras
+  ).length;
+  const ativos = rdata
+    ? Object.values(rdata.sections).flat().filter(c=>!DONE.includes(getClientState(c.pasta).status||'')).length : 0;
+  return { diasSemAtividade, aguardando, etapasNaSemana, ativos, temRdata: !!rdata };
+}
+
+// ── MONTA LISTA DE MOTIVOS DE ALERTA ────────────────────────────
+function montarMensagemAlerta(respShort, g) {
+  const motivos = [];
+  if(g.diasSemAtividade >= INACTIVITY_DAYS)
+    motivos.push(`há <strong>${g.diasSemAtividade} dia${g.diasSemAtividade>1?'s':''}</strong> sem acessar o sistema`);
+  if(g.aguardando > 0)
+    motivos.push(`<strong>${g.aguardando} pasta${g.aguardando>1?'s':''}</strong> aguardando ajuizamento sem movimentação`);
+  if(g.etapasNaSemana === 0 && g.ativos > 0)
+    motivos.push(`nenhuma etapa de contato registrada esta semana`);
+  return motivos;
+}
+
+// ── NOTIFICAÇÃO PUSH DO NAVEGADOR ───────────────────────────────
+async function solicitarPermissaoPush() {
+  if(!('Notification' in window)) return false;
+  if(Notification.permission === 'granted') return true;
+  if(Notification.permission === 'denied') return false;
+  const perm = await Notification.requestPermission();
+  return perm === 'granted';
+}
+function dispararPush(titulo, corpo, onClick) {
+  if(!('Notification' in window) || Notification.permission !== 'granted') return;
+  const icon = 'data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"><rect width="32" height="32" rx="6" fill="%231a4a8a"/><text x="16" y="22" text-anchor="middle" font-size="18" fill="white">⚖</text></svg>';
+  const n = new Notification(titulo, { body: corpo, icon, tag: 'lpdb-alerta', requireInteraction: true });
+  if(onClick) n.onclick = () => { window.focus(); onClick(); n.close(); };
+}
+
+// ── BANNER INTERNO ──────────────────────────────────────────────
+function mostrarBannerAlerta(respShort, motivos) {
+  const dispensadoHoje = localStorage.getItem('lpdb_alert_dismissed') === new Date().toISOString().split('T')[0];
+  if(dispensadoHoje || motivos.length === 0) return;
+  let msg = `Olá, <strong>${respShort}</strong>! 👋<br><br>` + motivos.map(m => `⚠️ ${m}`).join('<br>');
+  document.getElementById('alert-msg').innerHTML = msg;
+  document.getElementById('alert-banner').style.display = 'block';
+}
+
+// ── ALERTA VIA E-MAIL (mailto) ──────────────────────────────────
+function gerarMailtoAlerta(respShort, g, motivos) {
+  if(motivos.length === 0) return null;
+  const assunto = encodeURIComponent('[LPDB] Lembrete de atividade — ' + respShort);
+  const hoje = new Date().toLocaleDateString('pt-BR');
+  let corpo = 'Olá ' + respShort + ',\n\nEste é um lembrete automático do Sistema LPDB Iniciais 2026.\n\nData: ' + hoje + '\n\nSituação da sua carteira:\n';
+  if(g.diasSemAtividade >= INACTIVITY_DAYS) corpo += '• ' + g.diasSemAtividade + ' dias sem acessar o sistema\n';
+  if(g.aguardando > 0) corpo += '• ' + g.aguardando + ' pasta(s) em Aguardando Ajuizamento sem movimentação\n';
+  if(g.etapasNaSemana === 0 && g.ativos > 0) corpo += '• Nenhuma etapa de contato registrada esta semana\n';
+  corpo += '\nAcesse o sistema:\nhttps://brunorossoni.github.io/lpdb-kanban/\n\nAtenciosamente,\nSistema LPDB';
+  return 'mailto:?subject=' + assunto + '&body=' + encodeURIComponent(corpo);
+}
+
+// ── VERIFICAÇÃO PRINCIPAL ────────────────────────────────────────
+async function verificarAlertaInatividade() {
+  const respShort = detectarRespAtual();
+  if(!respShort) return;
+  const g = calcularGatilhos(respShort);
+  const motivos = montarMensagemAlerta(respShort, g);
+  if(motivos.length === 0) return;
+  mostrarBannerAlerta(respShort, motivos);
+  const temPush = await solicitarPermissaoPush();
+  if(temPush) {
+    const corpoTexto = motivos.map(m => m.replace(/<[^>]+>/g, '')).join(' · ');
+    dispararPush('⚠️ LPDB — Lembrete de atividade', corpoTexto, () => showPage('incomunicaveis', null));
+  }
+}
+
+// ── ALERTA PERIÓDICO A CADA 2H ───────────────────────────────────
+function agendarAlertasPeriodicos() {
+  setInterval(async () => {
+    const respShort = detectarRespAtual();
+    if(!respShort) return;
+    const g = calcularGatilhos(respShort);
+    const motivos = montarMensagemAlerta(respShort, g);
+    if(motivos.length === 0) return;
+    if('Notification' in window && Notification.permission === 'granted') {
+      const txt = motivos.map(m => m.replace(/<[^>]+>/g, '')).join(' · ');
+      dispararPush('⚠️ LPDB — Lembrete pendente', txt, () => showPage('incomunicaveis', null));
+    }
+  }, 2 * 60 * 60 * 1000);
+}
+
+function dismissAlert() { document.getElementById('alert-banner').style.display = 'none'; }
+function dismissAlertToday() {
+  localStorage.setItem('lpdb_alert_dismissed', new Date().toISOString().split('T')[0]);
+  document.getElementById('alert-banner').style.display = 'none';
+}
+
+// ── PAINEL DE PRESENÇA (GESTOR) ─────────────────────────────────
+let presenceAuthorized = false;
+function openPresencePanel() {
+  if(presenceAuthorized) { _abrirPresenca(); return; }
+  const m = document.getElementById('presence-auth-modal');
+  m.style.display = 'flex';
+  document.getElementById('presence-senha').value = '';
+  document.getElementById('presence-senha-erro').style.display = 'none';
+  setTimeout(()=>document.getElementById('presence-senha').focus(), 100);
+}
+function _abrirPresenca() {
+  renderPresence();
+  showPage('dashboard', null);
+  setTimeout(()=>{
+    document.getElementById('presence-panel').style.display = 'block';
+    document.getElementById('presence-panel').scrollIntoView({ behavior:'smooth', block:'start' });
+  }, 100);
+}
+function closePresence() { document.getElementById('presence-panel').style.display = 'none'; }
+function verificarSenhaPresenca() {
+  if(document.getElementById('presence-senha').value === REL_SENHA_HASH) {
+    presenceAuthorized = true;
+    document.getElementById('presence-auth-modal').style.display = 'none';
+    _abrirPresenca();
+  } else {
+    document.getElementById('presence-senha-erro').style.display = 'block';
+    document.getElementById('presence-senha').value = '';
+  }
+}
+
+function renderPresence() {
+  const { ultima: ultimaLog, contagem } = calcularPresenca();
+
+  // Lê ultimo_acesso real do Firestore se disponível
+  const ultimaReal = { ...ultimaLog };
+  if(_firestoreReady) {
+    db.collection('sistema').doc('ultimo_acesso').get().then(doc => {
+      if(!doc.exists) return;
+      const dados = doc.data();
+      for(const [login, info] of Object.entries(dados)) {
+        const user = USUARIOS.find(u => u.login === login);
+        if(!user) continue;
+        const chave = user.shortName;
+        if(!ultimaReal[chave] || info.ts > ultimaReal[chave]) ultimaReal[chave] = info.ts;
+      }
+      _renderPresenceCards(ultimaReal, contagem);
+    }).catch(() => _renderPresenceCards(ultimaReal, contagem));
+  } else {
+    _renderPresenceCards(ultimaReal, contagem);
+  }
+}
+
+function _renderPresenceCards(ultima, contagem) {
+  const hoje   = new Date().toISOString().split('T')[0];
+  const ontem  = new Date(Date.now()-86400000).toISOString().split('T')[0];
+  const semana = new Date(Date.now()-7*86400000).toISOString().split('T')[0];
+  const TODOS  = [...Object.keys(KANBAN_DATA.responsaveis), 'Julia', 'Matheus'];
+
+  const cards = TODOS.map(nome => {
+    const ult = ultima[nome];
+    const hojeCount = contagem[nome] || 0;
+    const ultDate = ult ? ult.split('T')[0] : null;
+    const diasAtras = ult ? Math.floor((Date.now()-new Date(ult))/(1000*60*60*24)) : 999;
+    let statusIcon, statusLabel, statusColor, statusBg;
+    if(!ult)               { statusIcon='⚪'; statusLabel='Sem registro'; statusColor='var(--text3)';  statusBg='var(--surface2)'; }
+    else if(ultDate===hoje) { statusIcon='🟢'; statusLabel='Ativo hoje';   statusColor='var(--green)';  statusBg='var(--green-bg)'; }
+    else if(ultDate===ontem){ statusIcon='🟡'; statusLabel='Ontem';         statusColor='var(--accent2)';statusBg='var(--yellow-bg)';}
+    else if(ultDate>=semana){ statusIcon='🔵'; statusLabel='Esta semana';  statusColor='var(--accent)'; statusBg='var(--blue-bg)'; }
+    else                    { statusIcon='🔴'; statusLabel='Inativo';       statusColor='var(--red)';    statusBg='var(--red-bg)'; }
+
+    const g = calcularGatilhos(nome);
+    const alertas = [];
+    if(g.diasSemAtividade >= INACTIVITY_DAYS) alertas.push(g.diasSemAtividade+'d sem acesso');
+    if(g.aguardando > 0) alertas.push(g.aguardando+' aguard. ajuiz.');
+    if(g.etapasNaSemana === 0 && g.ativos > 0) alertas.push('0 contatos/semana');
+
+    const isAdv = !!KANBAN_DATA.responsaveis[nome];
+    const estagiario = isAdv ? KANBAN_DATA.responsaveis[nome]?.estagiario : null;
+    const ultHora = ult ? new Date(ult).toLocaleString('pt-BR') : '—';
+    const motivos = montarMensagemAlerta(nome, g);
+    const mailto  = gerarMailtoAlerta(nome, g, motivos);
+    const mailBtn = mailto
+      ? '<a href="'+mailto+'" style="display:inline-block;margin-top:8px;background:var(--accent);color:#fff;border-radius:5px;padding:3px 10px;font-size:10px;font-weight:600;text-decoration:none;">✉️ Cobrar por e-mail</a>'
+      : '';
+    const resetBtn = '<button onclick="resetarSenha(\''+nome+'\')" style="display:inline-block;margin-top:4px;margin-left:4px;background:var(--surface2);border:1px solid var(--border);border-radius:5px;padding:3px 8px;font-size:10px;cursor:pointer;">🔑 Resetar senha</button>';
+
+    return '<div style="background:'+statusBg+';border:1px solid '+statusColor+'44;border-radius:10px;padding:14px 16px;">'
+      +'<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">'
+      +'<div><div style="font-weight:700;font-size:13px;">'+nome.split(' ')[0]+'</div>'
+      +'<div style="font-size:10px;color:var(--text3);">'+(isAdv?'Advogado':'Estagiário')+(estagiario?' · Est: '+estagiario:'')+'</div></div>'
+      +'<span style="font-size:20px;">'+statusIcon+'</span></div>'
+      +'<div style="font-size:12px;font-weight:600;color:'+statusColor+';margin-bottom:2px;">'+statusLabel+'</div>'
+      +'<div style="font-size:11px;color:var(--text2);">'+(diasAtras===0?'Hoje':diasAtras===1?'Ontem':diasAtras===999?'Nunca':diasAtras+'d atrás')+'</div>'
+      +'<div style="font-size:10px;color:var(--text3);margin-top:2px;">'+ultHora+'</div>'
+      +(hojeCount>0?'<div style="margin-top:5px;background:'+statusColor+'22;border-radius:4px;padding:2px 7px;font-size:10px;color:'+statusColor+';font-weight:600;">'+hojeCount+' ação'+(hojeCount>1?'s':'')+'</div>':'')
+      +(alertas.length>0?'<div style="margin-top:6px;font-size:10px;color:var(--red);font-weight:600;">⚠ '+alertas.join(' · ')+'</div>':'')
+      +mailBtn+resetBtn+'</div>';
+  });
+
+  const totalInativos = TODOS.filter(n=>{const u=ultima[n];if(!u)return true;return Math.floor((Date.now()-new Date(u))/(1000*60*60*24))>=INACTIVITY_DAYS;}).length;
+  const totalAtivosHoje = TODOS.filter(n=>ultima[n]?.split('T')[0]===hoje).length;
+
+  document.getElementById('presence-body').innerHTML =
+    '<div style="grid-column:1/-1;display:flex;gap:16px;margin-bottom:4px;flex-wrap:wrap;">'
+    +'<div style="background:var(--green-bg);border:1px solid var(--green);border-radius:8px;padding:8px 16px;font-size:12px;">🟢 <strong>'+totalAtivosHoje+'</strong> ativo'+(totalAtivosHoje!==1?'s':'')+'</div>'
+    +'<div style="background:var(--red-bg);border:1px solid var(--red);border-radius:8px;padding:8px 16px;font-size:12px;">🔴 <strong>'+totalInativos+'</strong> inativo'+(totalInativos!==1?'s':'')+' ('+INACTIVITY_DAYS+'+ dias)</div>'
+    +'<button onclick="enviarCobrancaGeral()" style="background:var(--accent);color:#fff;border:none;border-radius:8px;padding:8px 14px;font-size:12px;font-weight:600;cursor:pointer;margin-left:auto;">✉️ Cobrar todos inativos</button>'
+    +'</div>' + cards.join('');
+}
+
+function enviarCobrancaGeral() {
+  const { ultima } = calcularPresenca();
+  const inativos = Object.keys(KANBAN_DATA.responsaveis).filter(nome=>{
+    const u=ultima[nome.split(' ')[0]];
+    if(!u)return true;
+    return Math.floor((Date.now()-new Date(u))/(1000*60*60*24))>=INACTIVITY_DAYS;
+  });
+  if(inativos.length===0){notify('Nenhum inativo no momento ✓');return;}
+  const nomes = inativos.map(n=>n.split(' ')[0]).join(', ');
+  const assunto = encodeURIComponent('[LPDB] Lembrete de atividade no sistema');
+  const corpo = 'Bom dia,\n\nEste é um lembrete para que atualizem as atividades no sistema LPDB Iniciais 2026.\n\nPessoas com pendências: '+nomes+'\n\nAcesse: https://brunorossoni.github.io/lpdb-kanban/\n\nAtenciosamente';
+  window.open('mailto:?subject='+assunto+'&body='+encodeURIComponent(corpo));
+}
+
+// ── INIT ─────────────────────────────────────────────────────────
+function initAlertas() {
+  registrarSessao();
+  setTimeout(verificarAlertaInatividade, 3500);
+  agendarAlertasPeriodicos();
+}
+
+
+// Atualiza botão 📊 para abrir menu
+document.getElementById('btn-relatorio').onclick = function(e) {
+  e.stopPropagation();
+  // Alterna entre relatório e presença com duplo clique / menu rápido
+  openGestorMenu(e);
+};
+let _gestorMenuOpen = false;
+function openGestorMenu(e) {
+  let menu = document.getElementById('gestor-menu');
+  if(menu) { menu.remove(); _gestorMenuOpen = false; return; }
+  _gestorMenuOpen = true;
+  menu = document.createElement('div');
+  menu.id = 'gestor-menu';
+  menu.style.cssText = 'position:fixed;top:56px;right:16px;background:var(--surface);border:1px solid var(--border);border-radius:10px;box-shadow:var(--shadow-lg);z-index:5000;min-width:200px;overflow:hidden;';
+  menu.innerHTML = `
+    <div style="padding:8px 0;">
+      <button onclick="openRelatorio();document.getElementById('gestor-menu')?.remove();" style="width:100%;text-align:left;padding:10px 16px;background:none;border:none;cursor:pointer;font-size:13px;color:var(--text);display:flex;align-items:center;gap:10px;"><span>📊</span> Gerar Relatório</button>
+      <button onclick="openPresencePanel();document.getElementById('gestor-menu')?.remove();" style="width:100%;text-align:left;padding:10px 16px;background:none;border:none;cursor:pointer;font-size:13px;color:var(--text);display:flex;align-items:center;gap:10px;"><span>👁️</span> Painel de Presença</button>
+    </div>`;
+  document.body.appendChild(menu);
+  setTimeout(()=>{ document.addEventListener('click', ()=>{ menu?.remove(); _gestorMenuOpen=false; }, { once:true }); }, 50);
+}
+// ==================== FIM PRESENÇA & ALERTAS ====================
+
+// ==================== RELATÓRIO GESTOR ====================
+const REL_SENHA_HASH = 'lpdb2026gestor'; // Senha em texto — troque aqui para alterar
+
+function openRelatorio() {
+  const m = document.getElementById('relatorio-modal');
+  m.style.display = 'flex';
+  document.getElementById('rel-login-view').style.display = 'block';
+  document.getElementById('rel-gen-view').style.display = 'none';
+  document.getElementById('rel-senha').value = '';
+  document.getElementById('rel-senha-erro').style.display = 'none';
+  // Datas padrão: últimos 30 dias
+  const hoje = new Date();
+  const ini = new Date(hoje); ini.setDate(ini.getDate() - 30);
+  document.getElementById('rel-data-fim').value = hoje.toISOString().split('T')[0];
+  document.getElementById('rel-data-ini').value = ini.toISOString().split('T')[0];
+  setTimeout(()=>document.getElementById('rel-senha').focus(), 100);
+}
+function closeRelatorio() {
+  document.getElementById('relatorio-modal').style.display = 'none';
+}
+document.getElementById('relatorio-modal').addEventListener('click', e => {
+  if(e.target === document.getElementById('relatorio-modal')) closeRelatorio();
+});
+function verificarSenhaRel() {
+  const v = document.getElementById('rel-senha').value;
+  if(v === REL_SENHA_HASH) {
+    document.getElementById('rel-login-view').style.display = 'none';
+    document.getElementById('rel-gen-view').style.display = 'block';
+  } else {
+    document.getElementById('rel-senha-erro').style.display = 'block';
+    document.getElementById('rel-senha').value = '';
+    document.getElementById('rel-senha').focus();
+  }
+}
+
+function gerarRelatorio() {
+  document.getElementById('rel-progress').style.display = 'block';
+  setTimeout(() => {
+    try {
+      _buildRelatorioXlsx();
+    } catch(e) {
+      alert('Erro ao gerar relatório: ' + e.message);
+      console.error(e);
+    }
+    document.getElementById('rel-progress').style.display = 'none';
+  }, 80);
+}
+
+function _buildRelatorioXlsx() {
+  const dataIni = document.getElementById('rel-data-ini').value;
+  const dataFim = document.getElementById('rel-data-fim').value;
+  const inclStatus   = document.getElementById('rel-chk-status').checked;
+  const inclActlog   = document.getElementById('rel-chk-actlog').checked;
+  const inclDeleg    = document.getElementById('rel-chk-delegacao').checked;
+  const inclIncom    = document.getElementById('rel-chk-incom').checked;
+  const wb = XLSX.utils.book_new();
+  const today = new Date().toLocaleDateString('pt-BR');
+  const periodo = dataIni && dataFim ? `${dataIni} a ${dataFim}` : 'Todos os períodos';
+
+  // ── ABA 1: RESUMO POR RESPONSÁVEL ──
+  {
+    const rows = [
+      ['RELATÓRIO DE ATIVIDADES — LPDB ADVOGADOS'],
+      [`Gerado em: ${today}  |  Período: ${periodo}`],
+      [],
+      ['Responsável', 'Total Ativo', 'Ajuizados', '% Ajuiz.', 'Incomunicáveis', 'Encerrados', 'Em Contato', 'Aguard. Ajuiz.', 'Preparação', '>150 dias', 'Delegações ativas'],
+    ];
+    const DONE = ['ajuizado','incomunicavel','encerrado','reativado'];
+    for(const [rname, rdata] of Object.entries(KANBAN_DATA.responsaveis)) {
+      const all = Object.values(rdata.sections).flat();
+      const ajuiz = all.filter(c=>getClientState(c.pasta).status==='ajuizado').length;
+      const incom = all.filter(c=>getClientState(c.pasta).status==='incomunicavel').length;
+      const enc   = all.filter(c=>['encerrado','reativado'].includes(getClientState(c.pasta).status)).length;
+      const ativo = all.filter(c=>!DONE.includes(getClientState(c.pasta).status||'')).length;
+      const contat= all.filter(c=>{const cs=getClientState(c.pasta);return cs.steps&&Object.values(cs.steps).some(Boolean)&&!DONE.includes(cs.status||'');}).length;
+      const aguard= rdata.sections.aguardando_ajuizamento.filter(c=>!DONE.includes(getClientState(c.pasta).status||'')).length;
+      const prep  = rdata.sections.preparacao.filter(c=>!DONE.includes(getClientState(c.pasta).status||'')).length;
+      const over150=all.filter(c=>c.dias>150&&!DONE.includes(getClientState(c.pasta).status||'')).length;
+      const deleg = all.filter(c=>!!getClientState(c.pasta).delegadoPara).length;
+      const pct   = all.length>0 ? (ajuiz/all.length*100).toFixed(1)+'%' : '0%';
+      rows.push([rname, ativo, ajuiz, pct, incom, enc, contat, aguard, prep, over150, deleg]);
+    }
+    // Totais
+    const data = rows.slice(4);
+    const sum = i => data.reduce((a,r)=>a+(typeof r[i]==='number'?r[i]:0),0);
+    rows.push([]);
+    rows.push(['TOTAL', sum(1), sum(2), '', sum(4), sum(5), sum(6), sum(7), sum(8), sum(9), sum(10)]);
+    const ws = XLSX.utils.aoa_to_sheet(rows);
+    ws['!cols'] = [28,12,10,10,14,12,12,14,12,12,16].map(w=>({wch:w}));
+    ws['!merges'] = [{s:{r:0,c:0},e:{r:0,c:10}}];
+    XLSX.utils.book_append_sheet(wb, ws, 'Resumo por Responsável');
+  }
+
+  // ── ABA 2: PASTAS COM STATUS (inclStatus) ──
+  if(inclStatus) {
+    const rows = [
+      ['Pasta', 'Cliente', 'Responsável', 'Fase Original', 'Status Atual', 'Observação',
+       'WA1', 'WA2', 'WA3', 'Ligação', 'E-mail', 'Lenmit', 'Outros', 'Etapas OK',
+       'Delegado Para', 'Atualizado Em'],
+    ];
+    const stepKeys = ['whats1','whats2','whats3','ligacao','email','lenmit','outros'];
+    const FASE_N = {aguardando_ajuizamento:'Aguard. Ajuizamento',preparacao:'Preparação',
+      administrativa:'Administrativa',administrativa_2inst:'Adm. 2ª Inst.',
+      aguardando_providencia:'Aguard. Providência',aguardando_autorizacao:'Aguard. Autorização'};
+    for(const [rname, rdata] of Object.entries(KANBAN_DATA.responsaveis)) {
+      for(const [sec, clients] of Object.entries(rdata.sections)) {
+        for(const c of clients) {
+          const cs = getClientState(c.pasta);
+          // Filtro de data se houver updatedAt
+          if(dataIni && dataFim && cs.updatedAt) {
+            const d = cs.updatedAt.split('T')[0];
+            if(d < dataIni || d > dataFim) continue;
+          }
+          const stepsDone = stepKeys.filter(s=>cs.steps&&cs.steps[s]).length;
+          rows.push([
+            c.pasta, c.nome, rname, FASE_N[sec]||sec,
+            cs.status||'—', cs.obs||'',
+            ...stepKeys.map(s=>(cs.steps&&cs.steps[s])?'✓':''),
+            stepsDone,
+            cs.delegadoPara||'',
+            cs.updatedAt ? new Date(cs.updatedAt).toLocaleString('pt-BR') : ''
+          ]);
+        }
+      }
+    }
+    const ws = XLSX.utils.aoa_to_sheet(rows);
+    ws['!cols'] = [10,30,22,18,16,28,5,5,5,8,8,8,8,8,18,18].map(w=>({wch:w}));
+    XLSX.utils.book_append_sheet(wb, ws, 'Pastas e Status');
+  }
+
+  // ── ABA 3: LOG DE ATIVIDADES (inclActlog) ──
+  if(inclActlog) {
+    const log = _logCache.entries || [];
+    const rows = [['Data/Hora','Tipo','Pasta','Cliente','Responsável','Detalhe']];
+    const filtered = log.filter(item => {
+      if(!dataIni || !dataFim) return true;
+      const d = (item.ts||'').split('T')[0];
+      return d >= dataIni && d <= dataFim;
+    });
+    // Ordena mais recente primeiro
+    filtered.sort((a,b)=>(b.ts||'').localeCompare(a.ts||''));
+    for(const item of filtered) {
+      rows.push([
+        item.ts ? new Date(item.ts).toLocaleString('pt-BR') : '',
+        item.type||'', item.pasta||'', item.nome||'', item.resp||'', item.fase||''
+      ]);
+    }
+    if(rows.length === 1) rows.push(['(Nenhuma atividade no período)','','','','','']);
+    const ws = XLSX.utils.aoa_to_sheet(rows);
+    ws['!cols'] = [18,14,10,32,16,28].map(w=>({wch:w}));
+    XLSX.utils.book_append_sheet(wb, ws, 'Log de Atividades');
+  }
+
+  // ── ABA 4: DELEGAÇÕES ATIVAS (inclDeleg) ──
+  if(inclDeleg) {
+    const rows = [['Pasta','Cliente','Responsável Original','Delegado Para','Tipo','Delegado Em']];
+    for(const [rname, rdata] of Object.entries(KANBAN_DATA.responsaveis)) {
+      for(const clients of Object.values(rdata.sections)) {
+        for(const c of clients) {
+          const cs = getClientState(c.pasta);
+          if(!cs.delegadoPara) continue;
+          const isIntern = ['Julia','Matheus'].includes(cs.delegadoPara);
+          rows.push([
+            c.pasta, c.nome,
+            cs.responsavelOriginal || rname,
+            cs.delegadoPara,
+            isIntern ? 'Estagiário' : 'CX / Dupla',
+            cs.delegadoEm ? new Date(cs.delegadoEm).toLocaleString('pt-BR') : ''
+          ]);
+        }
+      }
+    }
+    if(rows.length === 1) rows.push(['(Nenhuma delegação ativa)','','','','','']);
+    const ws = XLSX.utils.aoa_to_sheet(rows);
+    ws['!cols'] = [10,32,24,24,14,18].map(w=>({wch:w}));
+    XLSX.utils.book_append_sheet(wb, ws, 'Delegações Ativas');
+  }
+
+  // ── ABA 5: INCOMUNICÁVEIS (inclIncom) ──
+  if(inclIncom) {
+    const rows = [['Pasta','Cliente','Responsável','Dias Aberto','WA1','WA2','WA3','Ligação','E-mail','Lenmit','Outros','Status','Observação']];
+    const stepKeys = ['whats1','whats2','whats3','ligacao','email','lenmit','outros'];
+    for(const [rname, rdata] of Object.entries(KANBAN_DATA.responsaveis)) {
+      for(const clients of Object.values(rdata.sections)) {
+        for(const c of clients) {
+          const cs = getClientState(c.pasta);
+          if(!['incomunicavel','em_contato','reativado'].includes(cs.status||'em_contato')) continue;
+          const hasAnyStep = stepKeys.some(s=>cs.steps&&cs.steps[s]);
+          if(cs.status==='em_contato' && !hasAnyStep) continue; // só inclui se teve alguma tentativa
+          rows.push([
+            c.pasta, c.nome, rname, c.dias||0,
+            ...stepKeys.map(s=>(cs.steps&&cs.steps[s])?new Date(cs.dates&&cs.dates[s]||'').toLocaleDateString('pt-BR'):''),
+            cs.status||'em_contato', cs.obs||''
+          ]);
+        }
+      }
+    }
+    if(rows.length === 1) rows.push(['(Nenhum registro)','','','','','','','','','','','','']);
+    const ws = XLSX.utils.aoa_to_sheet(rows);
+    ws['!cols'] = [10,32,22,10,12,12,12,12,12,12,12,16,28].map(w=>({wch:w}));
+    XLSX.utils.book_append_sheet(wb, ws, 'Triagem Incomunicáveis');
+  }
+
+  // Gera e baixa
+  const fname = `LPDB_Relatorio_Gestor_${today.replace(/\//g,'-')}.xlsx`;
+  XLSX.writeFile(wb, fname);
+  notify('📊 Relatório gerado: ' + fname);
+  closeRelatorio();
+}
+// ==================== FIM RELATÓRIO ====================
+
 function initCXToggle() {
   const check = document.getElementById('cx-toggle-check');
   if(check) {
@@ -3528,24 +4425,31 @@ function resetImport() {
 
 // ==================== INIT ====================
 async function _init() {
-  // Mostra loading enquanto carrega Firestore
-  document.body.insertAdjacentHTML('beforeend',
-    '<div id="fb-loading" style="position:fixed;inset:0;background:rgba(10,20,40,.85);z-index:9999;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:16px;">' +
-    '<div style="width:48px;height:48px;border:4px solid rgba(255,255,255,.2);border-top-color:#e8a800;border-radius:50%;animation:spin 1s linear infinite;"></div>' +
-    '<div style="color:#fff;font-family:DM Sans,sans-serif;font-size:14px;">Conectando ao banco de dados...</div>' +
-    '</div>');
-  if(!document.querySelector('#lpdb-spin-style')) {
-    const s = document.createElement('style');
-    s.id='lpdb-spin-style';
-    s.textContent='@keyframes spin{to{transform:rotate(360deg)}}';
-    document.head.appendChild(s);
+  if(_appIniciado) return;
+  _appIniciado = true;
+  // Se Firestore ainda não foi carregado (login direto sem _arranque), carrega agora
+  if(!_firestoreReady) {
+    document.body.insertAdjacentHTML('beforeend',
+      '<div id="fb-loading" style="position:fixed;inset:0;background:rgba(10,20,40,.85);z-index:9999;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:16px;">' +
+      '<div style="width:48px;height:48px;border:4px solid rgba(255,255,255,.2);border-top-color:#e8a800;border-radius:50%;animation:spin 1s linear infinite;"></div>' +
+      '<div style="color:#fff;font-family:DM Sans,sans-serif;font-size:14px;">Carregando dados...</div>' +
+      '</div>');
+    if(!document.querySelector('#lpdb-spin-style')) {
+      const s = document.createElement('style'); s.id='lpdb-spin-style';
+      s.textContent='@keyframes spin{to{transform:rotate(360deg)}}'; document.head.appendChild(s);
+    }
+    await loadAllStatesFromFirestore();
+    subscribeToRealtime();
+    document.getElementById('fb-loading')?.remove();
   }
-  await loadAllStatesFromFirestore();
-  subscribeToRealtime();
-  document.getElementById('fb-loading')?.remove();
+
+  // Registra acesso agora que Firestore está pronto
+  if(_currentUser) _registrarAcesso(_currentUser);
+
   renderDashboard();
   renderActivityLog();
   initCXToggle();
+  initAlertas();
 
   // Auto-refresh dashboard every 30s
   setInterval(() => {
@@ -3568,11 +4472,30 @@ async function _init() {
     }, 100);
   };
 }
+
+// Arranque: carrega senhas → verifica sessão → mostra login ou inicia app
+async function _arranque() {
+  // Pré-conecta Firebase e carrega senhas antes de mostrar login
+  try {
+    await loadAllStatesFromFirestore();
+    await _carregarSenhas();
+    subscribeToRealtime();
+  } catch {}
+
+  if(_verificarSessaoSalva()) {
+    // Sessão válida — esconde login e inicia
+    document.getElementById('login-screen').classList.add('hidden');
+    _mostrarBadge(_currentUser);
+    await _init();
+  }
+  // Sem sessão: login-screen já visível, _init será chamado após login bem-sucedido
+}
+
 // Wait for all external scripts (Chart.js, SheetJS) to load
 if(document.readyState === 'complete') {
-  _init();
+  _arranque();
 } else {
-  window.addEventListener('load', _init);
+  window.addEventListener('load', _arranque);
 }
 </script>
 </body>
