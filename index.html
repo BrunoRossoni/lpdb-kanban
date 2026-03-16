@@ -1,4 +1,3 @@
-
 <!DOCTYPE html>
 <html lang="pt-BR">
 <head>
@@ -36,6 +35,8 @@ const db = firebase.firestore();
 const USUARIOS = [
   // GESTOR (Bruno Peres Rossoni acumula gestor + advogado)
   { login: 'bruno',     displayName: 'Bruno Peres Rossoni',         role: 'gestor',     shortName: 'Bruno'    },
+  // GESTOR adicional
+  { login: 'lucas',     displayName: 'Lucas Kern Wilbert',          role: 'gestor',     shortName: 'Lucas'    },
   // ADVOGADOS
   { login: 'douglas',   displayName: 'Douglas Leandro da Silva',    role: 'advogado',   shortName: 'Douglas'  },
   { login: 'fernando',  displayName: 'Fernando de Gonzalez e Silva', role: 'advogado',  shortName: 'Fernando' },
@@ -721,6 +722,7 @@ body { font-family: "DM Sans", sans-serif; background: var(--bg); color: var(--t
         <option value="">— Selecione seu nome —</option>
         <optgroup label="⚖️ Advogados">
           <option value="bruno">Bruno Peres Rossoni</option>
+          <option value="lucas">Lucas Kern Wilbert</option>
           <option value="douglas">Douglas Leandro da Silva</option>
           <option value="fernando">Fernando de Gonzalez e Silva</option>
           <option value="janaina">Janaina Minetto</option>
