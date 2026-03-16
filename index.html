@@ -112,17 +112,26 @@ function _mostrarBadge(user) {
 }
 
 // ── FLUXO DE LOGIN ───────────────────────────────────────────────
+function _setBtnLogin(txt) {
+  const span = document.getElementById('login-btn-text');
+  const btn  = document.getElementById('login-btn');
+  if(span) span.textContent = txt;
+  else if(btn) btn.textContent = txt;
+}
+
 // Mostra a tela correta conforme usuário selecionado
 function aoSelecionarUsuario() {
   const login = document.getElementById('login-user').value;
   const user = USUARIOS.find(u => u.login === login);
   if(!user) return;
   const temSenha = _temSenha(login);
-  // Muda placeholder e label conforme primeiro acesso ou não
   document.getElementById('login-pass-label').textContent = temSenha ? 'Senha' : 'Criar senha (primeiro acesso)';
   document.getElementById('login-pass2-row').style.display = temSenha ? 'none' : 'block';
-  document.getElementById('login-btn-text').textContent = temSenha ? 'Entrar →' : 'Cadastrar senha e entrar →';
+  _setBtnLogin(temSenha ? 'Entrar →' : 'Cadastrar senha e entrar →');
   document.getElementById('login-err').style.display = 'none';
+  document.getElementById('login-pass').value = '';
+  document.getElementById('login-pass2').value = '';
+  setTimeout(() => document.getElementById('login-pass').focus(), 50);
 }
 
 async function tentarLogin() {
@@ -136,8 +145,16 @@ async function tentarLogin() {
   if(!user) { errEl.textContent = 'Selecione um usuário.'; errEl.style.display = 'block'; return; }
   if(!pass)  { errEl.textContent = 'Digite sua senha.'; errEl.style.display = 'block'; return; }
 
-  btn.disabled = true; btn.textContent = 'Aguarde...';
+  btn.disabled = true;
+  _setBtnLogin('Aguarde...');
   errEl.style.display = 'none';
+
+  // Garante que as senhas estão carregadas (pode ter selecionado antes do Firestore terminar)
+  if(Object.keys(_senhasCache).length === 0 && _firestoreReady) {
+    await _carregarSenhas();
+    // Atualiza UI do primeiro acesso após carregar
+    aoSelecionarUsuario();
+  }
 
   const hash = await _sha256(pass);
 
@@ -145,23 +162,22 @@ async function tentarLogin() {
     // PRIMEIRO ACESSO — cadastrar senha
     if(pass.length < 6) {
       errEl.textContent = 'Senha deve ter pelo menos 6 caracteres.'; errEl.style.display = 'block';
-      btn.disabled = false; btn.textContent = 'Cadastrar senha e entrar →'; return;
+      btn.disabled = false; _setBtnLogin('Cadastrar senha e entrar →'); return;
     }
     if(pass !== pass2) {
       errEl.textContent = 'As senhas não coincidem.'; errEl.style.display = 'block';
-      btn.disabled = false; btn.textContent = 'Cadastrar senha e entrar →'; return;
+      btn.disabled = false; _setBtnLogin('Cadastrar senha e entrar →'); return;
     }
     await _salvarSenha(login, hash);
     notify('✅ Senha criada com sucesso!');
   } else {
     // LOGIN NORMAL — verificar senha
     if(_senhasCache[login] !== hash) {
-      // Registra tentativa falha
       if(_firestoreReady) db.collection('sistema').doc('login_log').set(
         { ['falha_' + Date.now()]: { login, ts: new Date().toISOString() } }, { merge: true }).catch(()=>{});
       errEl.textContent = 'Senha incorreta.'; errEl.style.display = 'block';
       document.getElementById('login-pass').value = '';
-      btn.disabled = false; btn.textContent = 'Entrar →'; return;
+      btn.disabled = false; _setBtnLogin('Entrar →'); return;
     }
   }
 
@@ -171,7 +187,7 @@ async function tentarLogin() {
   _mostrarBadge(user);
   document.getElementById('login-screen').classList.add('hidden');
   _registrarAcesso(user);
-  btn.disabled = false; btn.textContent = 'Entrar →';
+  btn.disabled = false; _setBtnLogin('Entrar →');
   if(!_appIniciado) { await _init(); }
 }
 
@@ -184,7 +200,7 @@ function fazerLogout() {
   document.getElementById('login-err').style.display = 'none';
   document.getElementById('login-pass2-row').style.display = 'none';
   document.getElementById('login-pass-label').textContent = 'Senha';
-  document.getElementById('login-btn-text').textContent = 'Entrar →';
+  _setBtnLogin('Entrar →');
   document.getElementById('login-screen').classList.remove('hidden');
   document.getElementById('logged-user-badge').style.display = 'none';
 }
