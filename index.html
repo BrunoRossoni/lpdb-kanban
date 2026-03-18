@@ -911,9 +911,10 @@ body { font-family: "DM Sans", sans-serif; background: var(--bg); color: var(--t
         <button class="modal-close" onclick="document.getElementById('metas-config-modal').style.display='none'">✕</button>
       </div>
       <div class="modal-body" style="padding:24px;">
-        <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-bottom:16px;">
+        <div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:8px;margin-bottom:16px;">
           <div style="font-size:11px;font-weight:700;color:var(--text3);text-transform:uppercase;padding:0 4px;">Meta</div>
-          <div style="font-size:11px;font-weight:700;color:var(--text3);text-transform:uppercase;text-align:center;">Advogados</div>
+          <div style="font-size:11px;font-weight:700;color:var(--text3);text-transform:uppercase;text-align:center;">Titulares</div>
+          <div style="font-size:11px;font-weight:700;color:var(--text3);text-transform:uppercase;text-align:center;">CX (dupla)</div>
           <div style="font-size:11px;font-weight:700;color:var(--text3);text-transform:uppercase;text-align:center;">Estagiários</div>
         </div>
         <div id="metas-config-rows"></div>
@@ -1022,7 +1023,12 @@ body { font-family: "DM Sans", sans-serif; background: var(--bg); color: var(--t
 
 <!-- ESTAGIARIOS -->
 <div id="page-estagiarios" class="page">
-  <div class="section-title" style="margin-bottom:16px;">Painel dos Estagiários <small>Pastas em Preparação — análise e diagnóstico</small></div>
+  <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;flex-wrap:wrap;gap:12px;">
+    <div class="section-title" style="margin-bottom:0;">Painel dos Estagiários <small>Pastas em Preparação — análise e diagnóstico</small></div>
+    <button class="btn btn-primary" onclick="aplicarAnalisesEstagiarios()" style="background:var(--green);font-size:12px;padding:6px 16px;">
+      ⚡ Aplicar análises concluídas ao sistema
+    </button>
+  </div>
   <div class="intern-tabs">
     <button class="intern-tab active" onclick="showIntern('Julia',this)">📋 Julia — 36 pastas</button>
     <button class="intern-tab" onclick="showIntern('Matheus',this)">📋 Matheus — 24 pastas</button>
@@ -1626,7 +1632,11 @@ function computeStats() {
     else if(st === 'reativado') reativ++;
     else if(st === 'em_contato' && cs.steps && Object.values(cs.steps).some(Boolean)) contato++;
     else if(c.secao === 'aguardando_ajuizamento') aguard++;
-    else if(c.secao === 'preparacao') prep++;
+    else if(c.secao === 'preparacao') {
+      // Exclui pastas que estagiário já concluiu como pronto_ajuizar (serão movidas na próxima aplicação)
+      const jaResolvida = cs.internStatus === 'concluido' && cs.internAcao === 'pronto_ajuizar';
+      if(!jaResolvida) prep++;
+    }
     else demais++;
   }
   const finished = ajuiz + incom + encerrado + reativ;
@@ -2110,7 +2120,8 @@ function onDropKanban(event, targetCol) {
     type: STATUS_COLS.includes(targetCol) ? targetCol : 'contato',
     pasta,
     nome: client.nome,
-    resp: (client.responsavel||'').split(' ')[0],
+    resp: _currentUser?.shortName || (client.responsavel||'').split(' ')[0],
+    titular: (client.responsavel||'').split(' ')[0],
     fase: `Movido → ${colLabel[targetCol] || targetCol}`
   });
   renderKanban();
@@ -2197,7 +2208,11 @@ function renderDuplas() {
       const total = all.filter(c=>!DONE.includes(getClientState(c.pasta).status||'')).length;
       const contato = all.filter(c=>{const cs=getClientState(c.pasta);return cs.steps&&Object.values(cs.steps).some(Boolean);}).length;
       const aguard = rdata.sections.aguardando_ajuizamento.filter(c=>!DONE.includes(getClientState(c.pasta).status||'')).length;
-      const prep   = rdata.sections.preparacao.filter(c=>!DONE.includes(getClientState(c.pasta).status||'')).length;
+      const prep   = rdata.sections.preparacao.filter(c => {
+        if(DONE.includes(getClientState(c.pasta).status||'')) return false;
+        const cs = getClientState(c.pasta);
+        return !(cs.internStatus === 'concluido' && cs.internAcao === 'pronto_ajuizar');
+      }).length;
       const over150 = all.filter(c=>(c.dias||0)>150&&!DONE.includes(getClientState(c.pasta).status||'')).length;
       const pct = all.length > 0 ? Math.round(ajuiz/all.length*100) : 0;
       return {total, ajuiz, incom, enc, contato, aguard, prep, over150, pct};
@@ -2685,7 +2700,7 @@ function renderDocChecklist(pasta) {
 // Transfer: advogado só pode transferir para o seu próprio CX (1-para-1)
 let transferSelectedTarget = null;
 // Para transferência, usamos o nome do CX como novo "responsável" (mas mantemos as seções do advogado)
-// A lógica aqui: abre modal mostrando apenas o CX da dupla do responsável atual
+// A lógica aqui: delegação de execução (temporária) OU transferência de responsabilidade (permanente)
 
 function openTransfer() {
   if(!currentChecklistClient) return;
@@ -2698,26 +2713,36 @@ function openTransfer() {
   const isDelegated = !!cs.delegadoPara;
   const delegadoPara = cs.delegadoPara || null;
   transferSelectedTarget = null;
+  window._transferMode = 'execucao'; // 'execucao' ou 'responsabilidade'
   document.getElementById('transfer-confirm-btn').disabled = true;
+
   let bannerHtml = '';
   if(isDelegated) {
     const isInternDel = ['Julia','Matheus'].includes(delegadoPara);
     bannerHtml = '<div style="background:var(--yellow-bg);border:1px solid var(--accent2);border-radius:8px;padding:10px 14px;margin-bottom:12px;display:flex;align-items:center;gap:10px;font-size:12px;">'
       + '<span style="font-size:18px;">🔀</span>'
       + '<div style="flex:1;"><strong>' + (isInternDel ? 'Delegada ao estagiário ' + delegadoPara : 'Delegada para execução por ' + delegadoPara.split(" ")[0]) + '</strong><br>'
-      + '<span style="color:var(--text3);">Responsável permanece: <strong>' + trueOwner.split(" ")[0] + '</strong>'
+      + '<span style="color:var(--text3);">Responsável atual: <strong>' + trueOwner.split(" ")[0] + '</strong>'
       + ' · Delegada em: ' + new Date(cs.delegadoEm||"").toLocaleDateString("pt-BR") + '</span></div>'
       + '<button class="btn" style="background:var(--accent2);color:#fff;padding:5px 14px;font-size:12px;" onclick="undoTransfer()">↩️ Desfazer</button></div>';
   }
-  document.getElementById("transfer-subtitle").innerHTML = bannerHtml
-    + '<div style="font-size:12px;color:var(--text2);padding:4px 0;">Pasta <strong>' + pasta + '</strong> · ' + currentChecklistClient.nome
-    + '<br><span style="color:var(--green);font-weight:600;">Responsável: ' + trueOwner.split(" ")[0] + ' ' + trueOwner.split(" ").slice(-1)[0] + '</span>'
-    + '<span style="font-size:11px;color:var(--text3);margin-left:6px;">(não muda com a delegação)</span></div>';
+
+  // Seletor de modo
+  const modeHtml = '<div style="display:flex;gap:8px;margin-bottom:14px;">'
+    + '<button id="mode-exec-btn" onclick="setTransferMode(\'execucao\')" style="flex:1;padding:8px;border-radius:8px;font-size:12px;font-weight:600;cursor:pointer;border:2px solid var(--accent);background:var(--accent);color:#fff;">🔀 Delegar execução<br><span style="font-weight:400;font-size:10px;">Responsável não muda nas metas</span></button>'
+    + '<button id="mode-resp-btn" onclick="setTransferMode(\'responsabilidade\')" style="flex:1;padding:8px;border-radius:8px;font-size:12px;font-weight:600;cursor:pointer;border:2px solid var(--border);background:var(--surface);color:var(--text);">🔁 Transferir responsabilidade<br><span style="font-weight:400;font-size:10px;">Muda o dono da carteira nas metas</span></button>'
+    + '</div>';
+
+  document.getElementById("transfer-subtitle").innerHTML = bannerHtml + modeHtml
+    + '<div style="font-size:12px;color:var(--text2);padding:4px 0 10px;">Pasta <strong>' + pasta + '</strong> · ' + currentChecklistClient.nome
+    + '<br><span style="color:var(--accent);font-weight:600;">Responsável atual: ' + trueOwner.split(" ")[0] + ' ' + trueOwner.split(" ").slice(-1)[0] + '</span></div>';
+
   const opts = [
-    { rname: trueOwner,  display: trueOwner,  role: "⚖️ Responsável da pasta",  isOwner: true,  color: 'var(--accent)',  isCurrent: !isDelegated },
-    ...(cxName ? [{ rname: cxName,    display: cxName,    role: "👤 Executa pela dupla (CX)", isOwner: false, color: 'var(--accent2)', isCurrent: isDelegated && cs.delegadoPara === cxName }] : []),
+    { rname: trueOwner,  display: trueOwner,  role: "⚖️ Responsável atual",  isOwner: true,  color: 'var(--accent)',  isCurrent: !isDelegated },
+    ...(cxName ? [{ rname: cxName,    display: cxName,    role: "👤 Advogado CX da dupla", isOwner: false, color: 'var(--accent2)', isCurrent: isDelegated && cs.delegadoPara === cxName }] : []),
     ...(internName ? [{ rname: internName, display: internName + ' (Estagiário)', role: "📋 Estagiário da dupla", isOwner: false, color: 'var(--purple)', isCurrent: isDelegated && cs.delegadoPara === internName }] : []),
   ];
+
   document.getElementById("transfer-options").innerHTML = opts.map(opt =>
     '<div class="transfer-option' + (opt.isCurrent ? " selected" : "") + '" onclick="selectTransferTarget(' + "'" + opt.rname.replace(/'/g,"\\'") + "'" + ',this)">'
     + '<div style="width:36px;height:36px;border-radius:50%;background:' + (opt.color||'var(--accent)') + ';display:flex;align-items:center;justify-content:center;color:#fff;font-weight:700;font-size:14px;flex-shrink:0;">' + opt.display.charAt(0) + '</div>'
@@ -2727,8 +2752,32 @@ function openTransfer() {
     + (opt.isOwner ? '<div style="font-size:10px;background:var(--blue-bg);color:var(--accent);padding:2px 7px;border-radius:12px;font-weight:600;">RESP.</div>' : "")
     + "</div>"
   ).join("");
+
   document.getElementById("transfer-modal").classList.add("open");
 }
+
+function setTransferMode(mode) {
+  window._transferMode = mode;
+  const execBtn = document.getElementById('mode-exec-btn');
+  const respBtn = document.getElementById('mode-resp-btn');
+  if(!execBtn || !respBtn) return;
+  if(mode === 'execucao') {
+    execBtn.style.cssText = execBtn.style.cssText.replace(/border:[^;]+;background:[^;]+;color:[^;]+/, 'border:2px solid var(--accent);background:var(--accent);color:#fff');
+    respBtn.style.cssText = respBtn.style.cssText.replace(/border:[^;]+;background:[^;]+;color:[^;]+/, 'border:2px solid var(--border);background:var(--surface);color:var(--text)');
+    document.getElementById('transfer-subtitle-extra')?.remove();
+  } else {
+    execBtn.style.cssText = execBtn.style.cssText.replace(/border:[^;]+;background:[^;]+;color:[^;]+/, 'border:2px solid var(--border);background:var(--surface);color:var(--text)');
+    respBtn.style.cssText = respBtn.style.cssText.replace(/border:[^;]+;background:[^;]+;color:[^;]+/, 'border:2px solid var(--red);background:var(--red-bg);color:var(--red)');
+  }
+  // Reabilita botão confirm com base na seleção atual
+  if(transferSelectedTarget) {
+    document.getElementById('transfer-confirm-btn').disabled = false;
+    document.getElementById('transfer-confirm-btn').textContent = mode === 'responsabilidade'
+      ? '🔁 Transferir responsabilidade permanentemente'
+      : 'Confirmar Delegação';
+  }
+}
+
 function selectTransferTarget(rname, el) {
   transferSelectedTarget = rname;
   document.querySelectorAll(".transfer-option").forEach(o=>o.classList.remove("selected"));
@@ -2736,40 +2785,68 @@ function selectTransferTarget(rname, el) {
   const cs = getClientState(currentChecklistClient?.pasta);
   const trueOwner = cs.responsavelOriginal || currentChecklistClient?.responsavel;
   const currentExecutor = cs.delegadoPara || trueOwner;
-  document.getElementById("transfer-confirm-btn").disabled = (rname === currentExecutor);
+  const isChange = rname !== (window._transferMode === 'responsabilidade' ? trueOwner : currentExecutor);
+  document.getElementById("transfer-confirm-btn").disabled = !isChange;
+  document.getElementById('transfer-confirm-btn').textContent = window._transferMode === 'responsabilidade'
+    ? '🔁 Transferir responsabilidade permanentemente'
+    : 'Confirmar Delegação';
 }
+
 function confirmTransfer() {
   if(!transferSelectedTarget || !currentChecklistClient) return;
   const pasta = currentChecklistClient.pasta;
   const cs = getClientState(pasta);
   const trueOwner = cs.responsavelOriginal || currentChecklistClient.responsavel;
   const currentExecutor = cs.delegadoPara || trueOwner;
-  if(transferSelectedTarget === currentExecutor) { closeTransfer(); return; }
-  // NUNCA move a pasta no KANBAN_DATA — apenas marca flags de delegação
-  if(transferSelectedTarget === trueOwner) {
-    cs.delegadoPara = null;
+  const mode = window._transferMode || 'execucao';
+
+  if(mode === 'responsabilidade' && transferSelectedTarget !== trueOwner) {
+    // TRANSFERÊNCIA PERMANENTE: muda o responsável no clientState
+    // O Kanban_DATA não muda (pasta continua na coluna do titular original),
+    // mas o _titularMap e metas passam a usar o novo responsável
+    cs.responsavelOriginal = trueOwner;     // guarda o original
+    cs.responsavelAtual = transferSelectedTarget; // novo responsável para metas/log
+    cs.delegadoPara = null;                 // remove delegação de execução (são a mesma pessoa agora)
     cs.delegadoEm = null;
+    cs.responsabilidadeTransferidaEm = new Date().toISOString();
+    setClientState(pasta, cs);
+    const _exec = _currentUser?.shortName || trueOwner.split(' ')[0];
+    addActivityLog({ type:'contato', pasta, nome:currentChecklistClient.nome,
+      resp: _exec, titular: transferSelectedTarget.split(' ')[0],
+      fase: `🔁 Responsabilidade transferida de ${trueOwner.split(' ')[0]} para ${transferSelectedTarget.split(' ')[0]}` });
+    notify(`🔁 Responsabilidade transferida para ${transferSelectedTarget.split(' ')[0]}`);
+    document.getElementById("cl-responsavel").value = transferSelectedTarget;
+
   } else {
-    cs.responsavelOriginal = trueOwner;
-    cs.delegadoPara = transferSelectedTarget;
-    cs.delegadoEm = new Date().toISOString();
+    // DELEGAÇÃO DE EXECUÇÃO (comportamento original)
+    if(transferSelectedTarget === currentExecutor) { closeTransfer(); return; }
+    if(transferSelectedTarget === trueOwner) {
+      cs.delegadoPara = null;
+      cs.delegadoEm = null;
+    } else {
+      cs.responsavelOriginal = trueOwner;
+      cs.delegadoPara = transferSelectedTarget;
+      cs.delegadoEm = new Date().toISOString();
+    }
+    setClientState(pasta, cs);
+    document.getElementById("cl-responsavel").value = trueOwner;
+    _refreshChecklistDelegBanner(cs, trueOwner);
+    const _exec = _currentUser?.shortName || trueOwner.split(' ')[0];
+    const msg = transferSelectedTarget === trueOwner
+      ? "Execução devolvida para " + trueOwner.split(" ")[0]
+      : "Delegado para " + transferSelectedTarget.split(" ")[0] + " (resp: " + trueOwner.split(" ")[0] + ")";
+    addActivityLog({ type:"contato", pasta, nome:currentChecklistClient.nome,
+      resp: _exec, titular: trueOwner.split(" ")[0], fase: msg });
+    notify(transferSelectedTarget === trueOwner
+      ? "↩️ Execução devolvida para " + trueOwner.split(" ")[0]
+      : "🔀 Delegado para " + transferSelectedTarget.split(" ")[0]);
   }
-  setClientState(pasta, cs);
-  document.getElementById("cl-responsavel").value = trueOwner;
-  // Atualiza banner no checklist
-  _refreshChecklistDelegBanner(cs, trueOwner);
-  const msg = transferSelectedTarget === trueOwner
-    ? "Execução devolvida para " + trueOwner.split(" ")[0]
-    : "Delegado para " + transferSelectedTarget.split(" ")[0] + " (resp: " + trueOwner.split(" ")[0] + ")";
-  addActivityLog({ type:"contato", pasta, nome:currentChecklistClient.nome,
-    resp: trueOwner.split(" ")[0], fase: msg });
-  notify(transferSelectedTarget === trueOwner
-    ? "↩️ Execução devolvida para " + trueOwner.split(" ")[0]
-    : "🔀 Delegado para " + transferSelectedTarget.split(" ")[0] + " — responsável: " + trueOwner.split(" ")[0]);
+
   closeTransfer();
   renderKanban();
   renderResponsaveis();
 }
+
 function undoTransfer() {
   if(!currentChecklistClient) return;
   const pasta = currentChecklistClient.pasta;
@@ -2781,8 +2858,10 @@ function undoTransfer() {
   setClientState(pasta, cs);
   document.getElementById("cl-responsavel").value = trueOwner;
   _refreshChecklistDelegBanner(cs, trueOwner);
+  const _exec = _currentUser?.shortName || trueOwner.split(' ')[0];
   addActivityLog({ type:"contato", pasta, nome:currentChecklistClient.nome,
-    resp: trueOwner.split(" ")[0], fase:"Delegação desfeita — execução voltou para " + trueOwner.split(" ")[0] });
+    resp: _exec, titular: trueOwner.split(" ")[0],
+    fase:"Delegação desfeita — execução voltou para " + trueOwner.split(" ")[0] });
   notify("↩️ Delegação desfeita — pasta volta para " + trueOwner.split(" ")[0]);
   closeTransfer();
   renderKanban();
@@ -2903,16 +2982,20 @@ function saveChecklist() {
   };
   setClientState(currentChecklistClient.pasta, cs);
   // Log if status changed or a step was newly checked
+  // Executor = quem está logado. Titular = dono da carteira (pode ser diferente)
+  const _executor = _currentUser?.shortName || (currentChecklistClient.responsavel||'').split(' ')[0];
+  const _titular  = (currentChecklistClient.responsavel||'').split(' ')[0];
+
   if(newStatus !== prevStatus) {
     addActivityLog({
       type: newStatus,
       pasta: currentChecklistClient.pasta,
       nome: currentChecklistClient.nome,
-      resp: (currentChecklistClient.responsavel||'').split(' ')[0],
+      resp: _executor,    // quem EXECUTOU a ação
+      titular: _titular,  // dono da carteira (para atribuição de ajuizamentos)
       fase: {ajuizado:'→ Ajuizado', incomunicavel:'→ Incomunicável', em_contato:'→ Em Contato', reativado:'→ Reativado', encerrado:'→ Encerrado', aguardando_ajuizamento:'→ Aguard. Ajuizamento'}[newStatus]||newStatus
     });
   } else {
-    // Check if a new step was checked
     const newlyChecked = ALL_STEPS.find(s => cs.steps[s] && !(prevCs.steps&&prevCs.steps[s]));
     if(newlyChecked) {
       const stepNames = {whats1:'WhatsApp 1ª',whats2:'WhatsApp 2ª',whats3:'WhatsApp 3ª',ligacao:'Ligação',email:'E-mail',lenmit:'Lenmit',outros:'Outros'};
@@ -2920,7 +3003,8 @@ function saveChecklist() {
         type: 'contato',
         pasta: currentChecklistClient.pasta,
         nome: currentChecklistClient.nome,
-        resp: (currentChecklistClient.responsavel||'').split(' ')[0],
+        resp: _executor,
+        titular: _titular,
         fase: `Etapa: ${stepNames[newlyChecked]||newlyChecked}`
       });
     }
@@ -3485,6 +3569,27 @@ const INTERN_MAP = {
   'Janaina Minetto':              'Matheus',
   'Vitoria Dei Ricardi Weber':    'Matheus',
 };
+// Mapa CX → advogado titular (inverso do CX_MAP)
+const CX_ADV_MAP = Object.fromEntries(Object.entries(CX_MAP).map(([a,cx])=>[cx,a]));
+
+// Lista completa de todas as pessoas do sistema para cobranças/metas/alertas
+const TODAS_PESSOAS = [
+  // Advogados titulares
+  ...Object.entries(KANBAN_DATA.responsaveis).map(([k,v]) => ({
+    short: v.short, display: v.name, login: v.short.toLowerCase(), tipo: 'adv', isCX: false,
+    dupla: CX_MAP[k] ? CX_MAP[k].split(' ')[0] : null
+  })),
+  // Advogados CX (dupla)
+  { short:'Alice',     display:'Alice Ribeiro da Silva',          login:'alice',     tipo:'cx', isCX:true, advTitular:'Bruno'    },
+  { short:'Franciele', display:'Franciele Vitória Flach',         login:'franciele', tipo:'cx', isCX:true, advTitular:'Douglas'  },
+  { short:'Adriane',   display:'Adriane Viegas Martinez Cardoso', login:'adriane',   tipo:'cx', isCX:true, advTitular:'Fernando' },
+  { short:'Larissa',   display:'Larissa Bassan Suello Gonda',     login:'larissa',   tipo:'cx', isCX:true, advTitular:'Janaina'  },
+  { short:'Camila',    display:'Camila Oliveira Carregosa',       login:'camila',    tipo:'cx', isCX:true, advTitular:'Stalin'   },
+  { short:'Bibiana',   display:'Bibiana das Virgens de Castilhos',login:'bibiana',   tipo:'cx', isCX:true, advTitular:'Vitoria'  },
+  // Estagiários
+  { short:'Julia',     display:'Julia (Estagiária)',              login:'julia',     tipo:'est', isCX:false, dupla:null },
+  { short:'Matheus',   display:'Matheus (Estagiário)',            login:'matheus',   tipo:'est', isCX:false, dupla:null },
+];
 function isCXMode() {
   return localStorage.getItem('lpdb_cx_mode') === '1';
 }
@@ -3557,18 +3662,37 @@ function detectarRespAtual() {
 function calcularGatilhos(respShort) {
   const log = _logCache.entries || [];
   const DONE = ['ajuizado','incomunicavel','encerrado','reativado'];
-  const entry = Object.entries(KANBAN_DATA.responsaveis).find(([k]) => k.split(' ')[0] === respShort);
-  const rdata = entry?.[1];
+
+  // Localiza rdata: para CX, usa pastas delegadas para ele; para advogado, usa carteira própria
+  const pessoa = TODAS_PESSOAS.find(p => p.short === respShort);
+  let rdata = null;
+  let aguardando = 0, ativos = 0;
+
+  if(pessoa?.isCX) {
+    // CX: conta pastas que estão delegadas para ele
+    const allPastas = Object.values(KANBAN_DATA.responsaveis).flatMap(r => Object.values(r.sections).flat());
+    const delegadas = allPastas.filter(c => getClientState(c.pasta).delegadoPara === respShort);
+    aguardando = delegadas.filter(c => {
+      const sec = c.fase || c.secao || '';
+      return sec === 'aguardando_ajuizamento' && !DONE.includes(getClientState(c.pasta).status||'');
+    }).length;
+    ativos = delegadas.filter(c => !DONE.includes(getClientState(c.pasta).status||'')).length;
+  } else {
+    // Advogado titular ou estagiário: usa carteira normal
+    const entry = Object.entries(KANBAN_DATA.responsaveis).find(([k]) => k.split(' ')[0] === respShort);
+    rdata = entry?.[1];
+    aguardando = rdata
+      ? rdata.sections.aguardando_ajuizamento.filter(c => !DONE.includes(getClientState(c.pasta).status||'')).length : 0;
+    ativos = rdata
+      ? Object.values(rdata.sections).flat().filter(c=>!DONE.includes(getClientState(c.pasta).status||'')).length : 0;
+  }
+
   const ultAcao = log.filter(i=>i.resp===respShort&&i.ts).map(i=>i.ts).sort().reverse()[0];
   const diasSemAtividade = ultAcao ? Math.floor((Date.now()-new Date(ultAcao))/(1000*60*60*24)) : 999;
-  const aguardando = rdata
-    ? rdata.sections.aguardando_ajuizamento.filter(c => !DONE.includes(getClientState(c.pasta).status||'')).length : 0;
   const semanaAtras = new Date(); semanaAtras.setDate(semanaAtras.getDate()-7);
   const etapasNaSemana = log.filter(i =>
     i.resp===respShort && i.type==='contato' && i.ts && new Date(i.ts) > semanaAtras
   ).length;
-  const ativos = rdata
-    ? Object.values(rdata.sections).flat().filter(c=>!DONE.includes(getClientState(c.pasta).status||'')).length : 0;
   return { diasSemAtividade, aguardando, etapasNaSemana, ativos, temRdata: !!rdata };
 }
 
@@ -3611,9 +3735,12 @@ function mostrarBannerAlerta(respShort, motivos) {
 // ── ALERTA VIA E-MAIL (mailto) ──────────────────────────────────
 function gerarMailtoAlerta(respShort, g, motivos) {
   if(motivos.length === 0) return null;
-  const assunto = encodeURIComponent('[LPDB] Lembrete de atividade — ' + respShort);
+  const pessoa = TODAS_PESSOAS.find(p => p.short === respShort);
+  const nomeCompleto = pessoa ? pessoa.display.split(' ')[0] : respShort;
+  const roleLabel = pessoa?.isCX ? ' (Advogado dupla)' : pessoa?.tipo === 'est' ? ' (Estagiário)' : '';
+  const assunto = encodeURIComponent('[LPDB] Lembrete de atividade — ' + nomeCompleto + roleLabel);
   const hoje = new Date().toLocaleDateString('pt-BR');
-  let corpo = 'Olá ' + respShort + ',\n\nEste é um lembrete automático do Sistema LPDB Iniciais 2026.\n\nData: ' + hoje + '\n\nSituação da sua carteira:\n';
+  let corpo = 'Olá ' + nomeCompleto + ',\n\nEste é um lembrete automático do Sistema LPDB Iniciais 2026.\n\nData: ' + hoje + '\n\nSituação:\n';
   if(g.diasSemAtividade >= INACTIVITY_DAYS) corpo += '• ' + g.diasSemAtividade + ' dias sem acessar o sistema\n';
   if(g.aguardando > 0) corpo += '• ' + g.aguardando + ' pasta(s) em Aguardando Ajuizamento sem movimentação\n';
   if(g.etapasNaSemana === 0 && g.ativos > 0) corpo += '• Nenhuma etapa de contato registrada esta semana\n';
@@ -3660,12 +3787,8 @@ function dismissAlertToday() {
 // ── PAINEL DE PRESENÇA (GESTOR) ─────────────────────────────────
 let presenceAuthorized = false;
 function openPresencePanel() {
-  if(presenceAuthorized) { _abrirPresenca(); return; }
-  const m = document.getElementById('presence-auth-modal');
-  m.style.display = 'flex';
-  document.getElementById('presence-senha').value = '';
-  document.getElementById('presence-senha-erro').style.display = 'none';
-  setTimeout(()=>document.getElementById('presence-senha').focus(), 100);
+  if(_currentUser?.role !== 'gestor') { notify('⛔ Acesso restrito ao gestor.'); return; }
+  _abrirPresenca();
 }
 function _abrirPresenca() {
   renderPresence();
@@ -3812,13 +3935,13 @@ function _renderPresenceCards(ultima, contagem) {
 
 function enviarCobrancaGeral() {
   const { ultima } = calcularPresenca();
-  const inativos = Object.keys(KANBAN_DATA.responsaveis).filter(nome=>{
-    const u=ultima[nome.split(' ')[0]];
-    if(!u)return true;
-    return Math.floor((Date.now()-new Date(u))/(1000*60*60*24))>=INACTIVITY_DAYS;
+  const inativos = TODAS_PESSOAS.filter(p => {
+    const u = ultima[p.short];
+    if(!u) return true;
+    return Math.floor((Date.now()-new Date(u))/(1000*60*60*24)) >= INACTIVITY_DAYS;
   });
   if(inativos.length===0){notify('Nenhum inativo no momento ✓');return;}
-  const nomes = inativos.map(n=>n.split(' ')[0]).join(', ');
+  const nomes = inativos.map(p=>p.short).join(', ');
   const assunto = encodeURIComponent('[LPDB] Lembrete de atividade no sistema');
   const corpo = 'Bom dia,\n\nEste é um lembrete para que atualizem as atividades no sistema LPDB Iniciais 2026.\n\nPessoas com pendências: '+nomes+'\n\nAcesse: https://brunorossoni.github.io/lpdb-kanban/\n\nAtenciosamente';
   window.open('mailto:?subject='+assunto+'&body='+encodeURIComponent(corpo));
@@ -3883,6 +4006,7 @@ function _rastrearVisualizacao(pasta, nomeCliente, responsavel) {
 // Estrutura: { contatos: N, ajuizamentos: N, visualizacoes: N, analises: N }
 const METAS_DEFAULT = {
   adv:  { contatos: 15, ajuizamentos: 3, visualizacoes: 20, analises: 0  },
+  cx:   { contatos: 15, ajuizamentos: 0, visualizacoes: 20, analises: 0  }, // CX: sem meta de ajuizamentos (não tem carteira própria)
   est:  { contatos: 0,  ajuizamentos: 0, visualizacoes: 10, analises: 10 },
 };
 let _metasCache = null;
@@ -3902,29 +4026,74 @@ function _getMetas() {
 function _calcularSemanaAtual() {
   const log = _logCache.entries || [];
   const hoje = new Date();
-  const diaSemana = hoje.getDay(); // 0=dom
+  const diaSemana = hoje.getDay();
   const diasDesdeSegunda = diaSemana === 0 ? 6 : diaSemana - 1;
   const inicioSemana = new Date(hoje);
   inicioSemana.setDate(hoje.getDate() - diasDesdeSegunda);
   inicioSemana.setHours(0,0,0,0);
   const fimSemana = new Date(inicioSemana); fimSemana.setDate(inicioSemana.getDate() + 6);
 
-  const realizado = {}; // shortName -> { contatos, ajuizamentos, visualizacoes, analises }
+  // pasta -> titular (dono da carteira)
+  const _titularMap = {};
+  const allPastas = Object.values(KANBAN_DATA.responsaveis).flatMap(r =>
+    Object.values(r.sections).flat().map(c => ({ ...c, _short: r.short }))
+  );
+  for(const c of allPastas) {
+    const cs = getClientState(c.pasta);
+    // Se houve transferência permanente de responsabilidade, usa o novo responsável
+    _titularMap[String(c.pasta)] = cs.responsavelAtual || c._short;
+  }
+
+  const _init = () => ({ contatos:0, ajuizamentos:0, visualizacoes:0, analises:0, delegadas:0 });
+  const realizado = {};
+  const ensure = k => { if(!realizado[k]) realizado[k] = _init(); };
+
   for(const item of log) {
     if(!item.ts || !item.resp) continue;
     const d = new Date(item.ts);
     if(d < inicioSemana || d > fimSemana) continue;
-    const r = item.resp;
-    if(!realizado[r]) realizado[r] = { contatos:0, ajuizamentos:0, visualizacoes:0, analises:0 };
-    if(item.type === 'contato') realizado[r].contatos++;
-    if(item.type === 'ajuizado') realizado[r].ajuizamentos++;
-    if(item.type === 'visualizacao') realizado[r].visualizacoes++;
-    if(item.type === 'analise_intern') realizado[r].analises++;
+
+    const executor = item.resp;
+    // Titular: usa campo explicito do log (registrado desde a correção) ou busca pelo mapa
+    const titular  = item.titular || (item.pasta ? (_titularMap[String(item.pasta)] || executor) : executor);
+    ensure(executor);
+    ensure(titular);
+
+    if(item.type === 'ajuizado') {
+      // Ajuizamento → crédito ao TITULAR da carteira
+      // Se Franciele ajuizou pasta do Douglas: item.titular='Douglas', item.resp='Franciele'
+      // Douglas recebe +1 ajuizamento (meta de produção da carteira)
+      realizado[titular].ajuizamentos++;
+    } else if(item.type === 'contato') {
+      // Contato → crédito a QUEM EXECUTOU
+      realizado[executor].contatos++;
+    } else if(item.type === 'visualizacao') {
+      // Visualização → crédito a QUEM ABRIU
+      realizado[executor].visualizacoes++;
+    } else if(item.type === 'analise_intern') {
+      // Análise → crédito ao estagiário executor
+      realizado[executor].analises++;
+    }
   }
+
+  // Análises via Firestore (fonte mais confiável para estagiários)
+  for(const [internName, pastas] of Object.entries(KANBAN_DATA.estagiarios || {})) {
+    const concluidas = pastas.filter(c => getClientState(c.pasta).internStatus === 'concluido').length;
+    ensure(internName);
+    realizado[internName].analises = Math.max(realizado[internName].analises, concluidas);
+  }
+
+  // Pastas delegadas atualmente a cada pessoa (contexto, não meta)
+  for(const p of TODAS_PESSOAS) {
+    const n = allPastas.filter(c => getClientState(c.pasta).delegadoPara === p.short).length;
+    if(n > 0) { ensure(p.short); realizado[p.short].delegadas = n; }
+  }
+
   return { realizado, inicioSemana, fimSemana };
 }
 
 function openMetasPanel() {
+  if(_currentUser?.role !== 'gestor') { notify('⛔ Acesso restrito ao gestor.'); return; }
   showPage('dashboard', null);
   const panel = document.getElementById('metas-panel');
   panel.style.display = 'block';
@@ -3937,17 +4106,67 @@ function renderMetasPanel() {
   const metas = _getMetas();
   const fmt = d => d.toLocaleDateString('pt-BR', { day:'2-digit', month:'2-digit' });
   document.getElementById('metas-semana-label').textContent =
-    `Semana atual: ${fmt(inicioSemana)} a ${fmt(fimSemana)} · Os dados são calculados a partir do log de atividades`;
+    `Semana atual: ${fmt(inicioSemana)} a ${fmt(fimSemana)} · Contatos e visualizações via log · Análises via status do Firestore`;
 
-  const METRICA_LABELS = { contatos:'Contatos', ajuizamentos:'Ajuizamentos', visualizacoes:'Visualizações', analises:'Análises (est.)' };
+  const METRICA_LABELS = { contatos:'Contatos', ajuizamentos:'Ajuizamentos', visualizacoes:'Visualizações', analises:'Análises' };
   const METRICAS = ['contatos','ajuizamentos','visualizacoes','analises'];
 
-  // Todos os usuários com carteira ou função relevante
-  const PESSOAS = [
-    ...Object.entries(KANBAN_DATA.responsaveis).map(([k,v])=>({ short: v.short, display: v.name, tipo: 'adv' })),
-    { short:'Julia', display:'Julia (Estagiária)', tipo:'est' },
-    { short:'Matheus', display:'Matheus (Estagiário)', tipo:'est' },
+  // Agrupa: titulares + CX da dupla juntos, depois estagiários
+  const CX_PAIRS_ORDER = [
+    ['Bruno','Alice'],['Douglas','Franciele'],['Fernando','Adriane'],
+    ['Janaina','Larissa'],['Stalin','Camila'],['Vitoria','Bibiana'],
   ];
+  const EST_ORDER = ['Julia','Matheus'];
+
+  function _buildRow(p, bgColor) {
+    const r = realizado[p.short] || { contatos:0, ajuizamentos:0, visualizacoes:0, analises:0, delegadas:0 };
+    const m = metas[p.tipo] || METAS_DEFAULT.adv;
+    const metricasAtivas = METRICAS.filter(k => m[k] > 0);
+    const atingidas = metricasAtivas.filter(k => (r[k]||0) >= m[k]).length;
+    const pct = metricasAtivas.length > 0 ? atingidas / metricasAtivas.length : 1;
+    const semaforo = pct >= 1 ? ['🟢','var(--green)','Meta atingida'] : pct >= 0.5 ? ['🟡','var(--accent2)','Parcial'] : ['🔴','var(--red)','Abaixo'];
+
+    // Label de cargo e contexto
+    let roleLabel = '';
+    if(p.tipo === 'est') {
+      const totalAnalises = KANBAN_DATA.estagiarios?.[p.short]?.length || 0;
+      const concluidas = KANBAN_DATA.estagiarios?.[p.short]?.filter(c => {
+        const cs = getClientState(c.pasta); return cs.internStatus === 'concluido';
+      }).length || 0;
+      roleLabel = `${concluidas}/${totalAnalises} pastas analisadas`;
+    } else if(p.isCX) {
+      roleLabel = `dupla de ${p.advTitular} · ${r.delegadas||0} pasta${(r.delegadas||0)!==1?'s':''} delegadas`;
+    } else {
+      // Titular: mostra pastas ativas
+      const rdata = Object.values(KANBAN_DATA.responsaveis).find(rd=>rd.short===p.short);
+      const DONE = ['ajuizado','incomunicavel','encerrado','reativado'];
+      const ativas = rdata ? Object.values(rdata.sections).flat()
+        .filter(c=>!DONE.includes(getClientState(c.pasta).status||'')).length : 0;
+      roleLabel = `${ativas} pastas ativas`;
+    }
+
+    let rowHtml = `<tr style="border-bottom:1px solid var(--border);${bgColor?'background:'+bgColor+';':''}">
+      <td style="padding:8px 12px;">
+        <div style="font-weight:600;font-size:13px;">${p.display.split(' ')[0]}</div>
+        <div style="font-size:10px;color:var(--text3);">${roleLabel}</div>
+      </td>`;
+
+    for(const met of METRICAS) {
+      const val = r[met] || 0;
+      const meta = m[met];
+      const ok = meta === 0 || val >= meta;
+      const color = meta === 0 ? 'var(--text3)' : ok ? 'var(--green)' : val > 0 ? 'var(--accent2)' : 'var(--red)';
+      rowHtml += `<td style="padding:8px 12px;text-align:center;">
+        <span style="font-family:'DM Serif Display';font-size:18px;color:${color};">${val}</span>
+        ${meta > 0 ? `<span style="font-size:10px;color:var(--text3);display:block;">/ ${meta}</span>` : '<span style="font-size:10px;color:var(--text3);display:block;">—</span>'}
+      </td>`;
+    }
+    rowHtml += `<td style="padding:8px 12px;text-align:center;">
+      <span style="font-size:16px;">${semaforo[0]}</span>
+      <span style="font-size:10px;color:${semaforo[1]};display:block;font-weight:600;">${semaforo[2]}</span>
+    </td></tr>`;
+    return rowHtml;
+  }
 
   let html = `<table style="width:100%;border-collapse:collapse;font-size:12px;">
     <thead><tr style="background:var(--surface2);">
@@ -3956,33 +4175,26 @@ function renderMetasPanel() {
       <th style="padding:8px 12px;text-align:center;font-weight:700;color:var(--text2);">Status</th>
     </tr></thead><tbody>`;
 
-  for(const p of PESSOAS) {
-    const r = realizado[p.short] || { contatos:0, ajuizamentos:0, visualizacoes:0, analises:0 };
-    const m = metas[p.tipo] || METAS_DEFAULT.adv;
-    // Calcula score: % de metas atingidas (só metas > 0)
-    const metricasAtivas = METRICAS.filter(k => m[k] > 0);
-    const atingidas = metricasAtivas.filter(k => r[k] >= m[k]).length;
-    const pct = metricasAtivas.length > 0 ? atingidas / metricasAtivas.length : 1;
-    const semaforo = pct >= 1 ? ['🟢','var(--green)','Meta atingida'] : pct >= 0.5 ? ['🟡','var(--accent2)','Parcial'] : ['🔴','var(--red)','Abaixo da meta'];
-
-    html += `<tr style="border-bottom:1px solid var(--border);">
-      <td style="padding:10px 12px;font-weight:600;">${p.display.split(' ')[0]} <span style="font-size:10px;color:var(--text3);font-weight:400;">${p.display.includes('(')? p.display.match(/\([^)]+\)/)?.[0] : ''}</span></td>`;
-
-    for(const met of METRICAS) {
-      const val = r[met] || 0;
-      const meta = m[met];
-      const ok = meta === 0 || val >= meta;
-      const color = meta === 0 ? 'var(--text3)' : ok ? 'var(--green)' : val > 0 ? 'var(--accent2)' : 'var(--red)';
-      html += `<td style="padding:10px 12px;text-align:center;">
-        <span style="font-family:'DM Serif Display';font-size:18px;color:${color};">${val}</span>
-        ${meta > 0 ? `<span style="font-size:10px;color:var(--text3);display:block;">/ ${meta}</span>` : '<span style="font-size:10px;color:var(--text3);display:block;">—</span>'}
-      </td>`;
-    }
-    html += `<td style="padding:10px 12px;text-align:center;">
-      <span style="font-size:18px;">${semaforo[0]}</span>
-      <span style="font-size:10px;color:${semaforo[1]};display:block;font-weight:600;">${semaforo[2]}</span>
+  // Duplas — titular + CX intercalados com separador
+  for(const [advShort, cxShort] of CX_PAIRS_ORDER) {
+    const pAdv = TODAS_PESSOAS.find(p => p.short === advShort);
+    const pCX  = TODAS_PESSOAS.find(p => p.short === cxShort);
+    html += `<tr><td colspan="6" style="padding:6px 12px 2px;font-size:10px;font-weight:700;color:var(--text3);text-transform:uppercase;letter-spacing:.06em;background:var(--surface2);">
+      Dupla ${advShort} / ${cxShort}
     </td></tr>`;
+    if(pAdv) html += _buildRow(pAdv, '');
+    if(pCX)  html += _buildRow(pCX,  'var(--surface2)');
   }
+
+  // Estagiários
+  html += `<tr><td colspan="6" style="padding:6px 12px 2px;font-size:10px;font-weight:700;color:var(--text3);text-transform:uppercase;letter-spacing:.06em;background:var(--surface2);">
+    Estagiários
+  </td></tr>`;
+  for(const short of EST_ORDER) {
+    const p = TODAS_PESSOAS.find(p => p.short === short);
+    if(p) html += _buildRow(p, '');
+  }
+
   html += '</tbody></table>';
   document.getElementById('metas-body').innerHTML = html;
 }
@@ -3991,16 +4203,26 @@ function openMetasConfig() {
   const metas = _getMetas();
   const METRICA_LABELS = { contatos:'Contatos/semana', ajuizamentos:'Ajuizamentos/semana', visualizacoes:'Pastas abertas/semana', analises:'Análises/semana' };
   const METRICAS = ['contatos','ajuizamentos','visualizacoes','analises'];
-  let html = '';
+  // Cabeçalho
+  let html = `<div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:8px;margin-bottom:8px;">
+    <div></div>
+    <div style="font-size:11px;font-weight:700;color:var(--text3);text-align:center;text-transform:uppercase;">Advogados<br><span style="font-weight:400;font-size:10px;">titular com carteira</span></div>
+    <div style="font-size:11px;font-weight:700;color:var(--text3);text-align:center;text-transform:uppercase;">Advogados CX<br><span style="font-weight:400;font-size:10px;">sem carteira própria</span></div>
+    <div style="font-size:11px;font-weight:700;color:var(--text3);text-align:center;text-transform:uppercase;">Estagiários</div>
+  </div>`;
   for(const met of METRICAS) {
-    html += `<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;align-items:center;margin-bottom:10px;">
+    const cx_val = metas.cx?.[met] ?? METAS_DEFAULT.cx[met];
+    html += `<div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:8px;align-items:center;margin-bottom:10px;">
       <div style="font-size:12px;font-weight:600;padding:0 4px;">${METRICA_LABELS[met]}</div>
       <input type="number" min="0" id="meta_adv_${met}" value="${metas.adv?.[met]??METAS_DEFAULT.adv[met]}"
         style="border:1px solid var(--border);border-radius:6px;padding:6px 10px;font-size:13px;text-align:center;width:100%;box-sizing:border-box;">
+      <input type="number" min="0" id="meta_cx_${met}" value="${cx_val}"
+        style="border:1px solid var(--border);border-radius:6px;padding:6px 10px;font-size:13px;text-align:center;width:100%;box-sizing:border-box;${met==='ajuizamentos'?'background:var(--surface2);color:var(--text3);':''}">
       <input type="number" min="0" id="meta_est_${met}" value="${metas.est?.[met]??METAS_DEFAULT.est[met]}"
         style="border:1px solid var(--border);border-radius:6px;padding:6px 10px;font-size:13px;text-align:center;width:100%;box-sizing:border-box;">
     </div>`;
   }
+  html += `<div style="font-size:11px;color:var(--text3);margin-top:4px;">⚠️ Ajuizamentos CX: deixe em 0. O crédito vai para o titular da carteira automaticamente.</div>`;
   document.getElementById('metas-config-rows').innerHTML = html;
   document.getElementById('metas-config-modal').style.display = 'flex';
 }
@@ -4009,8 +4231,11 @@ async function salvarMetas() {
   const METRICAS = ['contatos','ajuizamentos','visualizacoes','analises'];
   const novas = {
     adv: Object.fromEntries(METRICAS.map(m=>[m, parseInt(document.getElementById('meta_adv_'+m).value)||0])),
+    cx:  Object.fromEntries(METRICAS.map(m=>[m, m==='ajuizamentos' ? 0 : parseInt(document.getElementById('meta_cx_'+m).value)||0])),
     est: Object.fromEntries(METRICAS.map(m=>[m, parseInt(document.getElementById('meta_est_'+m).value)||0])),
   };
+  // Garante que CX nunca tem meta de ajuizamentos
+  novas.cx.ajuizamentos = 0;
   _metasCache = novas;
   if(_firestoreReady) {
     await db.collection('sistema').doc('metas_semanais').set(novas).catch(()=>{});
@@ -4027,11 +4252,7 @@ function gerarRelatorioCobranca() {
   const fmt = d => d.toLocaleDateString('pt-BR');
   const hoje = new Date().toLocaleDateString('pt-BR');
 
-  const PESSOAS = [
-    ...Object.entries(KANBAN_DATA.responsaveis).map(([k,v])=>({ short:v.short, display:v.name, tipo:'adv' })),
-    { short:'Julia', display:'Julia (Estagiária)', tipo:'est' },
-    { short:'Matheus', display:'Matheus (Estagiário)', tipo:'est' },
-  ];
+  const PESSOAS = TODAS_PESSOAS;
   const METRICAS = ['contatos','ajuizamentos','visualizacoes','analises'];
   const LABELS = { contatos:'Contatos', ajuizamentos:'Ajuizamentos', visualizacoes:'Pastas abertas', analises:'Análises' };
 
@@ -4053,7 +4274,8 @@ function gerarRelatorioCobranca() {
       const pct = metasAtivas.length > 0 ? Math.round(atingidas/metasAtivas.length*100) : 100;
       const status = pct >= 100 ? '✅ Meta atingida' : pct >= 50 ? '⚠️ Parcial' : '🔴 Abaixo da meta';
       rows.push([
-        p.display, p.tipo === 'est' ? 'Estagiário' : 'Advogado',
+        p.display,
+        p.tipo === 'est' ? 'Estagiário' : p.isCX ? 'Advogado (dupla · ' + p.advTitular + ')' : 'Advogado',
         r.contatos||0, m.contatos,
         r.ajuizamentos||0, m.ajuizamentos,
         r.visualizacoes||0, m.visualizacoes,
@@ -4117,18 +4339,17 @@ function gerarRelatorioCobranca() {
 const REL_SENHA_HASH = 'lpdb2026gestor'; // Senha em texto — troque aqui para alterar
 
 function openRelatorio() {
+  if(_currentUser?.role !== 'gestor') { notify('⛔ Acesso restrito ao gestor.'); return; }
   const m = document.getElementById('relatorio-modal');
   m.style.display = 'flex';
-  document.getElementById('rel-login-view').style.display = 'block';
-  document.getElementById('rel-gen-view').style.display = 'none';
-  document.getElementById('rel-senha').value = '';
-  document.getElementById('rel-senha-erro').style.display = 'none';
+  // Gestor autenticado por role — pula tela de senha, abre direto na geração
+  document.getElementById('rel-login-view').style.display = 'none';
+  document.getElementById('rel-gen-view').style.display = 'block';
   // Datas padrão: últimos 30 dias
   const hoje = new Date();
   const ini = new Date(hoje); ini.setDate(ini.getDate() - 30);
   document.getElementById('rel-data-fim').value = hoje.toISOString().split('T')[0];
   document.getElementById('rel-data-ini').value = ini.toISOString().split('T')[0];
-  setTimeout(()=>document.getElementById('rel-senha').focus(), 100);
 }
 function closeRelatorio() {
   document.getElementById('relatorio-modal').style.display = 'none';
@@ -4415,6 +4636,90 @@ function _calcularScoreSemanal() {
 }
 
 // Injeta badge de score semanal no ranking
+// ==================== APLICAR ANÁLISES DOS ESTAGIÁRIOS ====================
+function aplicarAnalisesEstagiarios() {
+  const MOT = {
+    doc_incompleta:'Doc. Incompleta', analise_juridica:'Análise Jurídica',
+    calculo_pendente:'Cálculo Pendente', aguard_cliente:'Aguard. Cliente',
+    aguard_protocolo_adm:'Aguard. Protocolo Adm.', pronto_ajuizar:'Pronto p/ Ajuizamento', outro:'Outro'
+  };
+  const ACO = {
+    solicitar_doc:'Solicitar Documentos', encaminhar_juridico:'Enc. ao Responsável',
+    pronto_ajuizar:'Pronto para Ajuizamento', aguardar:'Aguardar Retorno'
+  };
+
+  // Coleta todas as pastas em preparação
+  const prepPastas = [];
+  for(const [rname, rdata] of Object.entries(KANBAN_DATA.responsaveis)) {
+    for(const c of rdata.sections.preparacao || []) {
+      prepPastas.push({ ...c, responsavel: rname, short: rdata.short });
+    }
+  }
+
+  let prontas = 0, encaminhadas = 0, aguardando = 0, semAnalise = 0;
+  const log_aplicacoes = [];
+
+  for(const c of prepPastas) {
+    const cs = getClientState(c.pasta);
+    if(!cs.internStatus || cs.internStatus === 'pendente') { semAnalise++; continue; }
+    if(cs.internStatus === 'em-analise') { aguardando++; continue; }
+
+    // internStatus === 'concluido'
+    if(cs.internAcao === 'pronto_ajuizar') {
+      // Move para Aguardando Ajuizamento via status override
+      if(cs.status !== 'aguardando_ajuizamento') {
+        const novo = { ...cs, status: 'aguardando_ajuizamento', kanbanCol: 'aguardando_ajuizamento', updatedAt: new Date().toISOString() };
+        setClientState(c.pasta, novo);
+        addActivityLog({ type:'contato', pasta:c.pasta, nome:c.nome, resp:c.short,
+          fase:`✅ Est: Pronto → movido para Aguard. Ajuizamento` });
+        log_aplicacoes.push({ pasta:c.pasta, nome:c.nome, resp:c.short, acao:'→ Aguard. Ajuizamento', motivo: MOT[cs.internMotivo]||'' });
+        prontas++;
+      }
+    } else if(cs.internAcao === 'encaminhar_juridico') {
+      // Sinaliza para o responsável via obs se ainda não sinalizado
+      if(!cs.internEncaminhado) {
+        const obsAtual = cs.obs || '';
+        const tag = `[Estagiário: ${MOT[cs.internMotivo]||cs.internMotivo} — ${ACO[cs.internAcao]||cs.internAcao}]`;
+        if(!obsAtual.includes('[Estagiário:')) {
+          const novo = { ...cs, obs: obsAtual ? obsAtual + '\n' + tag : tag,
+            internEncaminhado: true, updatedAt: new Date().toISOString() };
+          setClientState(c.pasta, novo);
+          addActivityLog({ type:'contato', pasta:c.pasta, nome:c.nome, resp:c.short,
+            fase:`🔍 Est: ${MOT[cs.internMotivo]||''} → encaminhado ao responsável` });
+          log_aplicacoes.push({ pasta:c.pasta, nome:c.nome, resp:c.short, acao:'→ Enc. responsável', motivo: MOT[cs.internMotivo]||'' });
+          encaminhadas++;
+        }
+      }
+    } else {
+      aguardando++;
+    }
+  }
+
+  // Exibe resumo
+  const total = prontas + encaminhadas + aguardando + semAnalise;
+  const msg = [
+    `✅ ${prontas} pasta${prontas!==1?'s':''} movida${prontas!==1?'s':''} para Aguard. Ajuizamento`,
+    `📋 ${encaminhadas} encaminhada${encaminhadas!==1?'s':''} ao responsável`,
+    `⏳ ${aguardando} aguardando conclusão`,
+    `⚪ ${semAnalise} sem análise ainda`,
+  ].join('\n');
+
+  // Modal de confirmação com detalhes
+  const detalhe = log_aplicacoes.length > 0
+    ? '\n\nAtualizadas:\n' + log_aplicacoes.map(l=>`  Pasta ${l.pasta} · ${l.nome.split(' ')[0]} · ${l.acao}${l.motivo?' ('+l.motivo+')':''}`).join('\n')
+    : '';
+
+  alert(`Análises dos estagiários aplicadas!\n\n${msg}${detalhe}`);
+
+  if(prontas > 0 || encaminhadas > 0) {
+    renderKanban();
+    renderIntern();
+    renderDashboard();
+    notify(`⚡ ${prontas + encaminhadas} pasta${(prontas+encaminhadas)!==1?'s':''} atualizada${(prontas+encaminhadas)!==1?'s':''} com base nas análises`);
+  }
+}
+// ==================== FIM APLICAR ANÁLISES ====================
+
 // Score semanal injetado em renderRanking abaixo
 function renderRanking() {
   _renderRankingBase();
@@ -4460,11 +4765,7 @@ function enviarCobrancaAtiva() {
   const LABELS   = { contatos:'contatos', ajuizamentos:'ajuizamentos', visualizacoes:'pastas abertas', analises:'análises' };
 
   // Monta lista de pendentes
-  const PESSOAS = [
-    ...Object.entries(KANBAN_DATA.responsaveis).map(([k,v])=>({ short:v.short, display:v.name, tipo:'adv' })),
-    { short:'Julia', display:'Julia', tipo:'est' },
-    { short:'Matheus', display:'Matheus', tipo:'est' },
-  ];
+  const PESSOAS = TODAS_PESSOAS;
   const pendentes = PESSOAS.filter(p => {
     const r = realizado[p.short] || {};
     const m = metas[p.tipo] || METAS_DEFAULT.adv;
@@ -5035,6 +5336,18 @@ async function _init() {
   if(_currentUser) _registrarAcesso(_currentUser);
   // Verifica cobrança ativa não lida
   setTimeout(_verificarCobrancaAtiva, 2000);
+
+  // Controle de visibilidade por role — botão 📊 só para gestores
+  const isGestor = _currentUser?.role === 'gestor';
+  const btnRel = document.getElementById('btn-relatorio');
+  if(btnRel) {
+    if(isGestor) {
+      btnRel.style.cssText = 'font-size:11px;';
+      btnRel.title = 'Painel do Gestor';
+    } else {
+      btnRel.style.display = 'none';
+    }
+  }
 
   renderDashboard();
   renderActivityLog();
