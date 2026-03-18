@@ -673,7 +673,21 @@ body { font-family: "DM Sans", sans-serif; background: var(--bg); color: var(--t
 .resp-phase-group { margin-bottom:4px; }
 .resp-phase-label { font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--text3);padding:3px 0 5px 2px; }
 
-/* RANKING */
+/* LINHA DO TEMPO */
+.timeline-item { display:flex; gap:12px; padding:10px 0; border-left:2px solid var(--border); margin-left:10px; position:relative; }
+.timeline-item:last-child { border-left-color:transparent; }
+.timeline-dot { width:20px; height:20px; border-radius:50%; border:2px solid var(--surface); flex-shrink:0; margin-left:-11px; display:flex; align-items:center; justify-content:center; font-size:10px; }
+.timeline-content { flex:1; padding-bottom:4px; }
+.timeline-time { font-size:10px; color:var(--text3); margin-bottom:2px; }
+.timeline-desc { font-size:12px; color:var(--text); font-weight:500; }
+.timeline-who  { font-size:11px; color:var(--text3); }
+/* SCORE BADGE */
+.score-badge { display:inline-flex; align-items:center; gap:4px; background:var(--accent2); color:#fff; border-radius:20px; padding:2px 10px; font-size:11px; font-weight:700; }
+/* READ CONFIRMATION */
+.cobranca-banner { position:fixed; top:0; left:0; right:0; z-index:8000; background:var(--accent); color:#fff; padding:14px 24px; display:flex; align-items:center; gap:16px; box-shadow:0 4px 16px rgba(0,0,0,.3); transform:translateY(-100%); transition:transform .4s ease; }
+.cobranca-banner.show { transform:translateY(0); }
+
+
 .rank-card { background:var(--surface); border:1px solid var(--border); border-radius:var(--radius); overflow:hidden; box-shadow:var(--shadow); margin-bottom:12px; }
 .rank-header { display:flex; align-items:center; gap:16px; padding:16px 20px; border-bottom:1px solid var(--border); }
 .rank-pos { font-family:'DM Serif Display'; font-size:36px; color:var(--text3); width:52px; text-align:center; flex-shrink:0; line-height:1; }
@@ -721,6 +735,17 @@ body { font-family: "DM Sans", sans-serif; background: var(--bg); color: var(--t
 </style>
 </head>
 <body>
+
+<!-- BANNER DE COBRANÇA COM CONFIRMAÇÃO DE LEITURA -->
+<div id="cobranca-banner" class="cobranca-banner">
+  <span style="font-size:22px;">📣</span>
+  <div style="flex:1;">
+    <div style="font-weight:700;font-size:14px;" id="cobranca-banner-title">Mensagem do Gestor</div>
+    <div style="font-size:13px;opacity:.9;margin-top:2px;" id="cobranca-banner-msg"></div>
+    <div style="font-size:11px;opacity:.6;margin-top:2px;" id="cobranca-banner-meta"></div>
+  </div>
+  <button id="cobranca-banner-btn" onclick="confirmarLeituraCobranca()" style="background:#fff;color:var(--accent);border:none;border-radius:8px;padding:8px 20px;font-weight:700;font-size:13px;cursor:pointer;white-space:nowrap;">✅ Ciente</button>
+</div>
 
 <!-- TELA DE LOGIN -->
 <div id="login-screen">
@@ -859,7 +884,45 @@ body { font-family: "DM Sans", sans-serif; background: var(--bg); color: var(--t
       <div style="color:#fff;font-weight:600;font-size:14px;">👁️ Presença no Sistema <span style="font-size:11px;font-weight:400;opacity:.7;">— últimos acessos e atividades</span></div>
       <button onclick="closePresence()" style="background:rgba(255,255,255,0.15);border:none;color:#fff;border-radius:6px;padding:3px 10px;cursor:pointer;font-size:12px;">✕ Fechar</button>
     </div>
-    <div id="presence-body" style="padding:16px 20px;display:grid;grid-template-columns:repeat(3,1fr);gap:12px;"></div>
+    <div id="presence-body" style="padding:16px 20px;display:grid;grid-template-columns:1fr 1fr;gap:10px;"></div>
+  </div>
+
+  <!-- Painel de Metas — visível com senha do gestor -->
+  <div id="metas-panel" style="display:none;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);box-shadow:var(--shadow);overflow:hidden;margin-bottom:28px;">
+    <div style="background:var(--accent);padding:12px 20px;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;">
+      <div style="color:#fff;font-weight:600;font-size:14px;">🎯 Metas Semanais <span style="font-size:11px;font-weight:400;opacity:.7;">— semáforo de desempenho por pessoa</span></div>
+      <div style="display:flex;gap:8px;align-items:center;">
+        <button onclick="openMetasConfig()" style="background:rgba(255,255,255,0.15);border:none;color:#fff;border-radius:6px;padding:4px 12px;cursor:pointer;font-size:12px;">⚙️ Configurar metas</button>
+        <button onclick="gerarRelatorioCobranca()" style="background:var(--accent2);border:none;color:#fff;border-radius:6px;padding:4px 12px;cursor:pointer;font-size:12px;font-weight:600;">📋 Relatório de Cobrança</button>
+        <button onclick="enviarCobrancaAtiva()" style="background:rgba(255,60,60,0.8);border:none;color:#fff;border-radius:6px;padding:4px 12px;cursor:pointer;font-size:12px;font-weight:600;">📣 Enviar Cobrança</button>
+        <button onclick="document.getElementById('metas-panel').style.display='none'" style="background:rgba(255,255,255,0.15);border:none;color:#fff;border-radius:6px;padding:3px 10px;cursor:pointer;font-size:12px;">✕</button>
+      </div>
+    </div>
+    <div id="metas-semana-label" style="padding:8px 20px;font-size:11px;color:var(--text3);background:var(--surface2);border-bottom:1px solid var(--border);"></div>
+    <div id="metas-body" style="padding:16px 20px;overflow-x:auto;"></div>
+  </div>
+
+  <!-- Modal de configuração de metas -->
+  <div class="modal-overlay" id="metas-config-modal" style="display:none;align-items:center;justify-content:center;">
+    <div class="modal" style="max-width:520px;">
+      <div class="modal-header" style="background:var(--accent);">
+        <div><div class="modal-title" style="color:#fff;">⚙️ Configurar Metas Semanais</div>
+          <div class="modal-subtitle-h" style="color:rgba(255,255,255,0.7);">Defina o mínimo esperado por semana de cada colaborador</div></div>
+        <button class="modal-close" onclick="document.getElementById('metas-config-modal').style.display='none'">✕</button>
+      </div>
+      <div class="modal-body" style="padding:24px;">
+        <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-bottom:16px;">
+          <div style="font-size:11px;font-weight:700;color:var(--text3);text-transform:uppercase;padding:0 4px;">Meta</div>
+          <div style="font-size:11px;font-weight:700;color:var(--text3);text-transform:uppercase;text-align:center;">Advogados</div>
+          <div style="font-size:11px;font-weight:700;color:var(--text3);text-transform:uppercase;text-align:center;">Estagiários</div>
+        </div>
+        <div id="metas-config-rows"></div>
+        <div style="display:flex;gap:10px;margin-top:16px;">
+          <button class="btn btn-primary" style="flex:1;" onclick="salvarMetas()">Salvar metas</button>
+          <button class="btn btn-secondary" onclick="document.getElementById('metas-config-modal').style.display='none'">Cancelar</button>
+        </div>
+      </div>
+    </div>
   </div>
 
   <!-- Tabela por Responsável -->
@@ -1294,6 +1357,7 @@ body { font-family: "DM Sans", sans-serif; background: var(--bg); color: var(--t
       <div class="modal-tabs">
         <button class="modal-tab active" id="tab-btn-docs" onclick="switchModalTab('docs')">📋 Documentos</button>
         <button class="modal-tab" id="tab-btn-incom" onclick="switchModalTab('incom')">📱 Tentativas de Contato</button>
+        <button class="modal-tab" id="tab-btn-timeline" onclick="switchModalTab('timeline')">🕐 Linha do Tempo</button>
       </div>
       <!-- TAB: Documentos -->
       <div id="tab-docs" class="modal-tab-panel active checklist-form" style="padding:16px 20px;">
@@ -1396,6 +1460,11 @@ body { font-family: "DM Sans", sans-serif; background: var(--bg); color: var(--t
           <div class="incom-warning-icon">🚫</div>
           <div class="incom-warning-text"><strong>Todas as 7 etapas esgotadas.</strong> Este cliente pode ser marcado como incomunicável. Altere o status acima e encaminhe ao gestor para aprovação antes de qualquer encerramento.</div>
         </div>
+      </div>
+      <!-- TAB: Linha do Tempo -->
+      <div id="tab-timeline" class="modal-tab-panel" style="padding:16px 20px;display:none;">
+        <div id="timeline-body" style="display:flex;flex-direction:column;gap:0;"></div>
+        <div id="timeline-empty" style="text-align:center;padding:32px;font-size:13px;color:var(--text3);">Nenhuma atividade registrada para esta pasta ainda.</div>
       </div>
     </div>
     <div class="modal-footer">
@@ -2742,7 +2811,7 @@ document.getElementById('transfer-modal').addEventListener('click', e => {
   if(e.target === document.getElementById('transfer-modal')) closeTransfer();
 });
 
-function switchModalTab(tab) {
+function _switchModalTabBase(tab) {
   document.querySelectorAll('.modal-tab').forEach(b => b.classList.remove('active'));
   document.querySelectorAll('.modal-tab-panel').forEach(p => { p.classList.remove('active'); p.style.display='none'; });
   document.getElementById('tab-btn-'+tab).classList.add('active');
@@ -2755,6 +2824,10 @@ function openChecklist(pasta) {
   const client = findClient(pasta);
   if(!client) return;
   currentChecklistClient = client;
+  // Rastreia visualização com usuário logado
+  _rastrearVisualizacao(pasta, client.nome, client.responsavel);
+  addActivityLog({ type:'visualizacao', pasta, nome:client.nome,
+    resp: _currentUser?.shortName || (client.responsavel||'').split(' ')[0], fase:'→ Pasta aberta' });
   document.getElementById('list-modal').classList.remove('open');
   document.getElementById('checklist-title').textContent = client.nome;
   // Show original fase in subtitle
@@ -3641,10 +3714,28 @@ function _renderPresenceCards(ultima, contagem) {
   const ontem  = new Date(Date.now()-86400000).toISOString().split('T')[0];
   const semana = new Date(Date.now()-7*86400000).toISOString().split('T')[0];
   const TODOS  = [...Object.keys(KANBAN_DATA.responsaveis), 'Julia', 'Matheus'];
+  // Duplas (CX) — agrupadas com seu advogado titular
+  const CX_PAIRS = [
+    { adv: 'Bruno',    cx: 'Alice'    },
+    { adv: 'Douglas',  cx: 'Franciele'},
+    { adv: 'Fernando', cx: 'Adriane'  },
+    { adv: 'Janaina',  cx: 'Larissa'  },
+    { adv: 'Stalin',   cx: 'Camila'   },
+    { adv: 'Vitoria',  cx: 'Bibiana'  },
+  ];
+  const CX_FULL = {
+    'Alice': 'Alice Ribeiro da Silva',
+    'Camila': 'Camila Oliveira Carregosa',
+    'Adriane': 'Adriane Viegas Martinez Cardoso',
+    'Franciele': 'Franciele Vitória Flach',
+    'Larissa': 'Larissa Bassan Suello Gonda',
+    'Bibiana': 'Bibiana das Virgens de Castilhos',
+  };
 
-  const cards = TODOS.map(nome => {
-    const ult = ultima[nome];
-    const hojeCount = contagem[nome] || 0;
+  // Função auxiliar: gera um card de presença para qualquer usuário (shortName)
+  function _mkCard(shortName, displayName, roleLabel, extra) {
+    const ult = ultima[shortName];
+    const hojeCount = contagem[shortName] || 0;
     const ultDate = ult ? ult.split('T')[0] : null;
     const diasAtras = ult ? Math.floor((Date.now()-new Date(ult))/(1000*60*60*24)) : 999;
     let statusIcon, statusLabel, statusColor, statusBg;
@@ -3653,45 +3744,70 @@ function _renderPresenceCards(ultima, contagem) {
     else if(ultDate===ontem){ statusIcon='🟡'; statusLabel='Ontem';         statusColor='var(--accent2)';statusBg='var(--yellow-bg)';}
     else if(ultDate>=semana){ statusIcon='🔵'; statusLabel='Esta semana';  statusColor='var(--accent)'; statusBg='var(--blue-bg)'; }
     else                    { statusIcon='🔴'; statusLabel='Inativo';       statusColor='var(--red)';    statusBg='var(--red-bg)'; }
-
-    const g = calcularGatilhos(nome);
+    const ultHora = ult ? new Date(ult).toLocaleString('pt-BR') : '—';
+    const g = calcularGatilhos(shortName);
     const alertas = [];
     if(g.diasSemAtividade >= INACTIVITY_DAYS) alertas.push(g.diasSemAtividade+'d sem acesso');
     if(g.aguardando > 0) alertas.push(g.aguardando+' aguard. ajuiz.');
     if(g.etapasNaSemana === 0 && g.ativos > 0) alertas.push('0 contatos/semana');
-
-    const isAdv = !!KANBAN_DATA.responsaveis[nome];
-    const estagiario = isAdv ? KANBAN_DATA.responsaveis[nome]?.estagiario : null;
-    const ultHora = ult ? new Date(ult).toLocaleString('pt-BR') : '—';
-    const motivos = montarMensagemAlerta(nome, g);
-    const mailto  = gerarMailtoAlerta(nome, g, motivos);
-    const mailBtn = mailto
-      ? '<a href="'+mailto+'" style="display:inline-block;margin-top:8px;background:var(--accent);color:#fff;border-radius:5px;padding:3px 10px;font-size:10px;font-weight:600;text-decoration:none;">✉️ Cobrar por e-mail</a>'
-      : '';
-    const resetBtn = '<button onclick="resetarSenha(\''+nome+'\')" style="display:inline-block;margin-top:4px;margin-left:4px;background:var(--surface2);border:1px solid var(--border);border-radius:5px;padding:3px 8px;font-size:10px;cursor:pointer;">🔑 Resetar senha</button>';
-
-    return '<div style="background:'+statusBg+';border:1px solid '+statusColor+'44;border-radius:10px;padding:14px 16px;">'
-      +'<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">'
-      +'<div><div style="font-weight:700;font-size:13px;">'+nome.split(' ')[0]+'</div>'
-      +'<div style="font-size:10px;color:var(--text3);">'+(isAdv?'Advogado':'Estagiário')+(estagiario?' · Est: '+estagiario:'')+'</div></div>'
-      +'<span style="font-size:20px;">'+statusIcon+'</span></div>'
+    const motivos = montarMensagemAlerta(shortName, g);
+    const mailto  = gerarMailtoAlerta(shortName, g, motivos);
+    const mailBtn = mailto ? '<a href="'+mailto+'" style="display:inline-block;margin-top:6px;background:var(--accent);color:#fff;border-radius:5px;padding:3px 10px;font-size:10px;font-weight:600;text-decoration:none;">✉️ Cobrar</a>' : '';
+    const resetBtn = '<button onclick="resetarSenha(\''+shortName+'\')" style="display:inline-block;margin-top:4px;margin-left:4px;background:var(--surface2);border:1px solid var(--border);border-radius:5px;padding:3px 8px;font-size:10px;cursor:pointer;">🔑 Reset</button>';
+    return '<div style="background:'+statusBg+';border:1px solid '+statusColor+'44;border-radius:10px;padding:12px 14px;flex:1;min-width:0;">'
+      +'<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;">'
+      +'<div style="min-width:0;">'
+      +'<div style="font-weight:700;font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">'+displayName+'</div>'
+      +'<div style="font-size:10px;color:var(--text3);">'+roleLabel+(extra?' · '+extra:'')+'</div>'
+      +'</div><span style="font-size:18px;margin-left:6px;">'+statusIcon+'</span></div>'
       +'<div style="font-size:12px;font-weight:600;color:'+statusColor+';margin-bottom:2px;">'+statusLabel+'</div>'
-      +'<div style="font-size:11px;color:var(--text2);">'+(diasAtras===0?'Hoje':diasAtras===1?'Ontem':diasAtras===999?'Nunca':diasAtras+'d atrás')+'</div>'
-      +'<div style="font-size:10px;color:var(--text3);margin-top:2px;">'+ultHora+'</div>'
-      +(hojeCount>0?'<div style="margin-top:5px;background:'+statusColor+'22;border-radius:4px;padding:2px 7px;font-size:10px;color:'+statusColor+';font-weight:600;">'+hojeCount+' ação'+(hojeCount>1?'s':'')+'</div>':'')
-      +(alertas.length>0?'<div style="margin-top:6px;font-size:10px;color:var(--red);font-weight:600;">⚠ '+alertas.join(' · ')+'</div>':'')
-      +mailBtn+resetBtn+'</div>';
-  });
+      +'<div style="font-size:10px;color:var(--text3);">'+(diasAtras===0?'Hoje':diasAtras===1?'Ontem':diasAtras===999?'Nunca':diasAtras+'d atrás')+' · '+ultHora+'</div>'
+      +(hojeCount>0?'<div style="margin-top:4px;background:'+statusColor+'22;border-radius:4px;padding:2px 6px;font-size:10px;color:'+statusColor+';font-weight:600;display:inline-block;">'+hojeCount+' ação'+(hojeCount>1?'s':'')+'</div>':'')
+      +(alertas.length>0?'<div style="margin-top:4px;font-size:10px;color:var(--red);font-weight:600;">⚠ '+alertas.join(' · ')+'</div>':'')
+      +'<div style="margin-top:4px;">'+mailBtn+resetBtn+'</div>'
+      +'</div>';
+  }
 
-  const totalInativos = TODOS.filter(n=>{const u=ultima[n];if(!u)return true;return Math.floor((Date.now()-new Date(u))/(1000*60*60*24))>=INACTIVITY_DAYS;}).length;
-  const totalAtivosHoje = TODOS.filter(n=>ultima[n]?.split('T')[0]===hoje).length;
+  // Monta seções: por dupla (adv + CX lado a lado) + estagiários
+  let cards = '';
+
+  // Título seção advogados
+  cards += '<div style="grid-column:1/-1;margin:8px 0 4px;font-family:\'DM Serif Display\';font-size:16px;color:var(--accent);">⚖️ Duplas de Advogados</div>';
+
+  for(const pair of CX_PAIRS) {
+    const rdata = Object.entries(KANBAN_DATA.responsaveis).find(([k])=>k.split(' ')[0]===pair.adv)?.[1];
+    const advFullName = rdata ? rdata.name : pair.adv;
+    const cxFullName  = CX_FULL[pair.cx] || pair.cx;
+    const estagiario  = rdata ? rdata.estagiario : '';
+
+    cards += '<div style="grid-column:1/-1;display:flex;gap:10px;margin-bottom:6px;flex-wrap:wrap;">';
+    // Label da dupla
+    cards += '<div style="width:100%;font-size:11px;font-weight:700;color:var(--text3);text-transform:uppercase;letter-spacing:.05em;margin-bottom:2px;">Dupla · Est: '+estagiario+'</div>';
+    // Card advogado
+    cards += _mkCard(pair.adv, advFullName, 'Advogado', '');
+    // Card CX
+    cards += _mkCard(pair.cx, cxFullName, 'Advogado (CX)', 'dupla de '+pair.adv);
+    cards += '</div>';
+  }
+
+  // Título seção estagiários
+  cards += '<div style="grid-column:1/-1;margin:12px 0 4px;font-family:\'DM Serif Display\';font-size:16px;color:var(--accent);">📋 Estagiários</div>';
+  cards += '<div style="grid-column:1/-1;display:flex;gap:10px;flex-wrap:wrap;">';
+  cards += _mkCard('Julia',   'Julia (Estagiária)',  'Estagiária', 'Bruno · Douglas · Stalin');
+  cards += _mkCard('Matheus', 'Matheus (Estagiário)', 'Estagiário', 'Fernando · Janaina · Vitoria');
+  cards += '</div>';
+
+  // Conta todos para o resumo (advogados + CX + estagiários)
+  const TODOS_COMPLETO = [...TODOS, ...CX_PAIRS.map(p=>p.cx)];
+  const totalInativos    = TODOS_COMPLETO.filter(n=>{const u=ultima[n];if(!u)return true;return Math.floor((Date.now()-new Date(u))/(1000*60*60*24))>=INACTIVITY_DAYS;}).length;
+  const totalAtivosHoje  = TODOS_COMPLETO.filter(n=>ultima[n]?.split('T')[0]===hoje).length;
 
   document.getElementById('presence-body').innerHTML =
     '<div style="grid-column:1/-1;display:flex;gap:16px;margin-bottom:4px;flex-wrap:wrap;">'
-    +'<div style="background:var(--green-bg);border:1px solid var(--green);border-radius:8px;padding:8px 16px;font-size:12px;">🟢 <strong>'+totalAtivosHoje+'</strong> ativo'+(totalAtivosHoje!==1?'s':'')+'</div>'
+    +'<div style="background:var(--green-bg);border:1px solid var(--green);border-radius:8px;padding:8px 16px;font-size:12px;">🟢 <strong>'+totalAtivosHoje+'</strong> ativo'+(totalAtivosHoje!==1?'s':'')+' hoje</div>'
     +'<div style="background:var(--red-bg);border:1px solid var(--red);border-radius:8px;padding:8px 16px;font-size:12px;">🔴 <strong>'+totalInativos+'</strong> inativo'+(totalInativos!==1?'s':'')+' ('+INACTIVITY_DAYS+'+ dias)</div>'
     +'<button onclick="enviarCobrancaGeral()" style="background:var(--accent);color:#fff;border:none;border-radius:8px;padding:8px 14px;font-size:12px;font-weight:600;cursor:pointer;margin-left:auto;">✉️ Cobrar todos inativos</button>'
-    +'</div>' + cards.join('');
+    +'</div>' + cards;
 }
 
 function enviarCobrancaGeral() {
@@ -3734,11 +3850,268 @@ function openGestorMenu(e) {
     <div style="padding:8px 0;">
       <button onclick="openRelatorio();document.getElementById('gestor-menu')?.remove();" style="width:100%;text-align:left;padding:10px 16px;background:none;border:none;cursor:pointer;font-size:13px;color:var(--text);display:flex;align-items:center;gap:10px;"><span>📊</span> Gerar Relatório</button>
       <button onclick="openPresencePanel();document.getElementById('gestor-menu')?.remove();" style="width:100%;text-align:left;padding:10px 16px;background:none;border:none;cursor:pointer;font-size:13px;color:var(--text);display:flex;align-items:center;gap:10px;"><span>👁️</span> Painel de Presença</button>
+      <button onclick="openMetasPanel();document.getElementById('gestor-menu')?.remove();" style="width:100%;text-align:left;padding:10px 16px;background:none;border:none;cursor:pointer;font-size:13px;color:var(--text);display:flex;align-items:center;gap:10px;"><span>🎯</span> Metas e Cobrança</button>
     </div>`;
   document.body.appendChild(menu);
   setTimeout(()=>{ document.addEventListener('click', ()=>{ menu?.remove(); _gestorMenuOpen=false; }, { once:true }); }, 50);
 }
 // ==================== FIM PRESENÇA & ALERTAS ====================
+
+// ==================== FIM PRESENÇA & ALERTAS ====================
+
+// ==================== RASTREAMENTO DE VISUALIZAÇÕES ====================
+// Registra abertura de pasta no Firestore com usuário logado
+function _rastrearVisualizacao(pasta, nomeCliente, responsavel) {
+  if(!_currentUser) return;
+  if(!_firestoreReady) return;
+  const ts = new Date().toISOString();
+  const chave = 'view_' + _currentUser.login + '_' + String(pasta) + '_' + ts.replace(/[:.]/g,'');
+  db.collection('sistema').doc('visualizacoes').set({
+    [chave]: {
+      login: _currentUser.login,
+      nome:  _currentUser.displayName,
+      short: _currentUser.shortName,
+      pasta: String(pasta),
+      cliente: nomeCliente || '',
+      responsavel: responsavel || '',
+      ts
+    }
+  }, { merge: true }).catch(()=>{});
+}
+
+// ==================== METAS SEMANAIS ====================
+// Estrutura: { contatos: N, ajuizamentos: N, visualizacoes: N, analises: N }
+const METAS_DEFAULT = {
+  adv:  { contatos: 15, ajuizamentos: 3, visualizacoes: 20, analises: 0  },
+  est:  { contatos: 0,  ajuizamentos: 0, visualizacoes: 10, analises: 10 },
+};
+let _metasCache = null;
+
+async function _carregarMetas() {
+  try {
+    const doc = await db.collection('sistema').doc('metas_semanais').get();
+    _metasCache = doc.exists ? doc.data() : { ...METAS_DEFAULT };
+  } catch { _metasCache = { ...METAS_DEFAULT }; }
+}
+
+function _getMetas() {
+  return _metasCache || METAS_DEFAULT;
+}
+
+// Calcula o que cada pessoa fez na semana atual (seg–dom)
+function _calcularSemanaAtual() {
+  const log = _logCache.entries || [];
+  const hoje = new Date();
+  const diaSemana = hoje.getDay(); // 0=dom
+  const diasDesdeSegunda = diaSemana === 0 ? 6 : diaSemana - 1;
+  const inicioSemana = new Date(hoje);
+  inicioSemana.setDate(hoje.getDate() - diasDesdeSegunda);
+  inicioSemana.setHours(0,0,0,0);
+  const fimSemana = new Date(inicioSemana); fimSemana.setDate(inicioSemana.getDate() + 6);
+
+  const realizado = {}; // shortName -> { contatos, ajuizamentos, visualizacoes, analises }
+  for(const item of log) {
+    if(!item.ts || !item.resp) continue;
+    const d = new Date(item.ts);
+    if(d < inicioSemana || d > fimSemana) continue;
+    const r = item.resp;
+    if(!realizado[r]) realizado[r] = { contatos:0, ajuizamentos:0, visualizacoes:0, analises:0 };
+    if(item.type === 'contato') realizado[r].contatos++;
+    if(item.type === 'ajuizado') realizado[r].ajuizamentos++;
+    if(item.type === 'visualizacao') realizado[r].visualizacoes++;
+    if(item.type === 'analise_intern') realizado[r].analises++;
+  }
+  return { realizado, inicioSemana, fimSemana };
+}
+
+function openMetasPanel() {
+  showPage('dashboard', null);
+  const panel = document.getElementById('metas-panel');
+  panel.style.display = 'block';
+  setTimeout(()=> panel.scrollIntoView({ behavior:'smooth', block:'start' }), 100);
+  renderMetasPanel();
+}
+
+function renderMetasPanel() {
+  const { realizado, inicioSemana, fimSemana } = _calcularSemanaAtual();
+  const metas = _getMetas();
+  const fmt = d => d.toLocaleDateString('pt-BR', { day:'2-digit', month:'2-digit' });
+  document.getElementById('metas-semana-label').textContent =
+    `Semana atual: ${fmt(inicioSemana)} a ${fmt(fimSemana)} · Os dados são calculados a partir do log de atividades`;
+
+  const METRICA_LABELS = { contatos:'Contatos', ajuizamentos:'Ajuizamentos', visualizacoes:'Visualizações', analises:'Análises (est.)' };
+  const METRICAS = ['contatos','ajuizamentos','visualizacoes','analises'];
+
+  // Todos os usuários com carteira ou função relevante
+  const PESSOAS = [
+    ...Object.entries(KANBAN_DATA.responsaveis).map(([k,v])=>({ short: v.short, display: v.name, tipo: 'adv' })),
+    { short:'Julia', display:'Julia (Estagiária)', tipo:'est' },
+    { short:'Matheus', display:'Matheus (Estagiário)', tipo:'est' },
+  ];
+
+  let html = `<table style="width:100%;border-collapse:collapse;font-size:12px;">
+    <thead><tr style="background:var(--surface2);">
+      <th style="padding:8px 12px;text-align:left;font-weight:700;color:var(--text2);">Colaborador</th>
+      ${METRICAS.map(m=>`<th style="padding:8px 12px;text-align:center;font-weight:700;color:var(--text2);">${METRICA_LABELS[m]}</th>`).join('')}
+      <th style="padding:8px 12px;text-align:center;font-weight:700;color:var(--text2);">Status</th>
+    </tr></thead><tbody>`;
+
+  for(const p of PESSOAS) {
+    const r = realizado[p.short] || { contatos:0, ajuizamentos:0, visualizacoes:0, analises:0 };
+    const m = metas[p.tipo] || METAS_DEFAULT.adv;
+    // Calcula score: % de metas atingidas (só metas > 0)
+    const metricasAtivas = METRICAS.filter(k => m[k] > 0);
+    const atingidas = metricasAtivas.filter(k => r[k] >= m[k]).length;
+    const pct = metricasAtivas.length > 0 ? atingidas / metricasAtivas.length : 1;
+    const semaforo = pct >= 1 ? ['🟢','var(--green)','Meta atingida'] : pct >= 0.5 ? ['🟡','var(--accent2)','Parcial'] : ['🔴','var(--red)','Abaixo da meta'];
+
+    html += `<tr style="border-bottom:1px solid var(--border);">
+      <td style="padding:10px 12px;font-weight:600;">${p.display.split(' ')[0]} <span style="font-size:10px;color:var(--text3);font-weight:400;">${p.display.includes('(')? p.display.match(/\([^)]+\)/)?.[0] : ''}</span></td>`;
+
+    for(const met of METRICAS) {
+      const val = r[met] || 0;
+      const meta = m[met];
+      const ok = meta === 0 || val >= meta;
+      const color = meta === 0 ? 'var(--text3)' : ok ? 'var(--green)' : val > 0 ? 'var(--accent2)' : 'var(--red)';
+      html += `<td style="padding:10px 12px;text-align:center;">
+        <span style="font-family:'DM Serif Display';font-size:18px;color:${color};">${val}</span>
+        ${meta > 0 ? `<span style="font-size:10px;color:var(--text3);display:block;">/ ${meta}</span>` : '<span style="font-size:10px;color:var(--text3);display:block;">—</span>'}
+      </td>`;
+    }
+    html += `<td style="padding:10px 12px;text-align:center;">
+      <span style="font-size:18px;">${semaforo[0]}</span>
+      <span style="font-size:10px;color:${semaforo[1]};display:block;font-weight:600;">${semaforo[2]}</span>
+    </td></tr>`;
+  }
+  html += '</tbody></table>';
+  document.getElementById('metas-body').innerHTML = html;
+}
+
+function openMetasConfig() {
+  const metas = _getMetas();
+  const METRICA_LABELS = { contatos:'Contatos/semana', ajuizamentos:'Ajuizamentos/semana', visualizacoes:'Pastas abertas/semana', analises:'Análises/semana' };
+  const METRICAS = ['contatos','ajuizamentos','visualizacoes','analises'];
+  let html = '';
+  for(const met of METRICAS) {
+    html += `<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;align-items:center;margin-bottom:10px;">
+      <div style="font-size:12px;font-weight:600;padding:0 4px;">${METRICA_LABELS[met]}</div>
+      <input type="number" min="0" id="meta_adv_${met}" value="${metas.adv?.[met]??METAS_DEFAULT.adv[met]}"
+        style="border:1px solid var(--border);border-radius:6px;padding:6px 10px;font-size:13px;text-align:center;width:100%;box-sizing:border-box;">
+      <input type="number" min="0" id="meta_est_${met}" value="${metas.est?.[met]??METAS_DEFAULT.est[met]}"
+        style="border:1px solid var(--border);border-radius:6px;padding:6px 10px;font-size:13px;text-align:center;width:100%;box-sizing:border-box;">
+    </div>`;
+  }
+  document.getElementById('metas-config-rows').innerHTML = html;
+  document.getElementById('metas-config-modal').style.display = 'flex';
+}
+
+async function salvarMetas() {
+  const METRICAS = ['contatos','ajuizamentos','visualizacoes','analises'];
+  const novas = {
+    adv: Object.fromEntries(METRICAS.map(m=>[m, parseInt(document.getElementById('meta_adv_'+m).value)||0])),
+    est: Object.fromEntries(METRICAS.map(m=>[m, parseInt(document.getElementById('meta_est_'+m).value)||0])),
+  };
+  _metasCache = novas;
+  if(_firestoreReady) {
+    await db.collection('sistema').doc('metas_semanais').set(novas).catch(()=>{});
+  }
+  document.getElementById('metas-config-modal').style.display = 'none';
+  renderMetasPanel();
+  notify('🎯 Metas atualizadas com sucesso!');
+}
+
+// ==================== RELATÓRIO DE COBRANÇA SEMANAL ====================
+function gerarRelatorioCobranca() {
+  const { realizado, inicioSemana, fimSemana } = _calcularSemanaAtual();
+  const metas = _getMetas();
+  const fmt = d => d.toLocaleDateString('pt-BR');
+  const hoje = new Date().toLocaleDateString('pt-BR');
+
+  const PESSOAS = [
+    ...Object.entries(KANBAN_DATA.responsaveis).map(([k,v])=>({ short:v.short, display:v.name, tipo:'adv' })),
+    { short:'Julia', display:'Julia (Estagiária)', tipo:'est' },
+    { short:'Matheus', display:'Matheus (Estagiário)', tipo:'est' },
+  ];
+  const METRICAS = ['contatos','ajuizamentos','visualizacoes','analises'];
+  const LABELS = { contatos:'Contatos', ajuizamentos:'Ajuizamentos', visualizacoes:'Pastas abertas', analises:'Análises' };
+
+  const wb = XLSX.utils.book_new();
+
+  // ── ABA 1: SEMÁFORO GERAL ──
+  {
+    const rows = [
+      [`RELATÓRIO DE COBRANÇA SEMANAL — LPDB ADVOGADOS`],
+      [`Semana: ${fmt(inicioSemana)} a ${fmt(fimSemana)}  |  Emitido em: ${hoje}`],
+      [],
+      ['Colaborador', 'Cargo', 'Contatos', 'Meta', 'Ajuizamentos', 'Meta', 'Pastas Abertas', 'Meta', 'Análises', 'Meta', '% Metas Atingidas', 'Status'],
+    ];
+    for(const p of PESSOAS) {
+      const r = realizado[p.short] || {};
+      const m = metas[p.tipo] || METAS_DEFAULT.adv;
+      const metasAtivas = METRICAS.filter(k=>m[k]>0);
+      const atingidas = metasAtivas.filter(k=>(r[k]||0)>=m[k]).length;
+      const pct = metasAtivas.length > 0 ? Math.round(atingidas/metasAtivas.length*100) : 100;
+      const status = pct >= 100 ? '✅ Meta atingida' : pct >= 50 ? '⚠️ Parcial' : '🔴 Abaixo da meta';
+      rows.push([
+        p.display, p.tipo === 'est' ? 'Estagiário' : 'Advogado',
+        r.contatos||0, m.contatos,
+        r.ajuizamentos||0, m.ajuizamentos,
+        r.visualizacoes||0, m.visualizacoes,
+        r.analises||0, m.analises,
+        pct + '%', status
+      ]);
+    }
+    const ws = XLSX.utils.aoa_to_sheet(rows);
+    ws['!cols'] = [28,12,10,8,14,8,14,8,10,8,16,18].map(w=>({wch:w}));
+    ws['!merges'] = [{s:{r:0,c:0},e:{r:0,c:11}}];
+    XLSX.utils.book_append_sheet(wb, ws, 'Semáforo Semanal');
+  }
+
+  // ── ABA 2: MENSAGENS DE COBRANÇA PRONTAS ──
+  {
+    const rows = [['Colaborador','Status','Mensagem de Cobrança (copie e envie)']];
+    for(const p of PESSOAS) {
+      const r = realizado[p.short] || {};
+      const m = metas[p.tipo] || METAS_DEFAULT.adv;
+      const metasAtivas = METRICAS.filter(k=>m[k]>0);
+      const pendencias = metasAtivas.filter(k=>(r[k]||0)<m[k]);
+      if(pendencias.length === 0) {
+        rows.push([p.display.split(' ')[0], '✅ OK', 'Parabéns! Todas as metas da semana foram atingidas.']);
+        continue;
+      }
+      const itens = pendencias.map(k => `${LABELS[k]}: fez ${r[k]||0} de ${m[k]} esperados`).join('; ');
+      const msg = `Olá ${p.display.split(' ')[0]}, tudo bem? Na semana de ${fmt(inicioSemana)} a ${fmt(fimSemana)}, algumas metas ficaram pendentes: ${itens}. Pode dar uma atenção? Qualquer dúvida estou à disposição.`;
+      rows.push([p.display.split(' ')[0], pendencias.length===metasAtivas.length?'🔴 Abaixo':'⚠️ Parcial', msg]);
+    }
+    const ws = XLSX.utils.aoa_to_sheet(rows);
+    ws['!cols'] = [{wch:18},{wch:14},{wch:80}];
+    XLSX.utils.book_append_sheet(wb, ws, 'Mensagens de Cobrança');
+  }
+
+  // ── ABA 3: HISTÓRICO DETALHADO (LOG DA SEMANA) ──
+  {
+    const log = _logCache.entries || [];
+    const inicioSemana2 = new Date(inicioSemana);
+    const rows = [['Data/Hora','Tipo','Pasta','Cliente','Responsável','Detalhe']];
+    const itens = log
+      .filter(i => i.ts && new Date(i.ts) >= inicioSemana2)
+      .sort((a,b) => b.ts.localeCompare(a.ts));
+    for(const i of itens) {
+      rows.push([
+        new Date(i.ts).toLocaleString('pt-BR'),
+        i.type||'', i.pasta||'', i.nome||'', i.resp||'', i.fase||''
+      ]);
+    }
+    if(rows.length===1) rows.push(['(Nenhuma atividade registrada nesta semana)','','','','','']);
+    const ws = XLSX.utils.aoa_to_sheet(rows);
+    ws['!cols'] = [18,14,10,30,14,28].map(w=>({wch:w}));
+    XLSX.utils.book_append_sheet(wb, ws, 'Log da Semana');
+  }
+
+  const fname = `LPDB_Cobranca_Semanal_${fmt(inicioSemana).replace(/\//g,'-')}.xlsx`;
+  XLSX.writeFile(wb, fname);
+  notify('📋 Relatório de cobrança gerado: ' + fname);
+}
 
 // ==================== RELATÓRIO GESTOR ====================
 const REL_SENHA_HASH = 'lpdb2026gestor'; // Senha em texto — troque aqui para alterar
@@ -3963,7 +4336,204 @@ function initCXToggle() {
 }
 
 // ==================== RANKING ====================
+// ==================== LINHA DO TEMPO POR PASTA ====================
+function renderTimeline(pasta) {
+  const body  = document.getElementById('timeline-body');
+  const empty = document.getElementById('timeline-empty');
+  if(!body) return;
+
+  const log = (_logCache.entries || []).filter(i => String(i.pasta) === String(pasta));
+  // Também inclui dados do clientState (steps com datas)
+  const cs = getClientState(pasta);
+  const stepEvents = [];
+  const stepNames = { whats1:'WhatsApp 1ª tentativa', whats2:'WhatsApp 2ª tentativa',
+    whats3:'WhatsApp 3ª tentativa', ligacao:'Ligação telefônica',
+    email:'E-mail enviado', lenmit:'Pesquisa Lenmit', outros:'Outros contatos' };
+  if(cs.dates) {
+    for(const [s, dt] of Object.entries(cs.dates)) {
+      if(dt && cs.steps && cs.steps[s]) {
+        stepEvents.push({ ts: dt+'T00:00:00', tipo:'contato', desc: stepNames[s]||s, who: '—' });
+      }
+    }
+  }
+
+  // Une eventos do log + steps, ordena por data desc
+  const TYPE_CFG = {
+    visualizacao: { icon:'👁️', color:'var(--blue-bg)', border:'var(--accent)'  },
+    contato:      { icon:'📱', color:'var(--yellow-bg)',border:'var(--accent2)' },
+    ajuizado:     { icon:'✅', color:'var(--green-bg)', border:'var(--green)'   },
+    incomunicavel:{ icon:'🚫', color:'var(--red-bg)',   border:'var(--red)'     },
+    encerrado:    { icon:'🗂️', color:'var(--surface2)', border:'var(--text3)'  },
+    reativado:    { icon:'🔄', color:'var(--green-bg)', border:'var(--green)'   },
+    analise_intern:{icon:'🔍', color:'var(--purple-bg)',border:'var(--purple)'  },
+    sessao:       { icon:'🔐', color:'var(--surface2)', border:'var(--text3)'  },
+    default:      { icon:'•',  color:'var(--surface2)', border:'var(--border)'  },
+  };
+
+  const allEvents = [
+    ...log.map(i => ({ ts:i.ts, tipo:i.type||'default', desc:i.fase||'Ação', who:i.resp||'—' })),
+    ...stepEvents,
+  ].sort((a,b) => (b.ts||'').localeCompare(a.ts||''));
+
+  if(allEvents.length === 0) {
+    body.innerHTML = ''; empty.style.display = 'block'; return;
+  }
+  empty.style.display = 'none';
+
+  body.innerHTML = allEvents.map(ev => {
+    const cfg = TYPE_CFG[ev.tipo] || TYPE_CFG.default;
+    const dt  = ev.ts ? new Date(ev.ts).toLocaleString('pt-BR') : '—';
+    return `<div class="timeline-item">
+      <div class="timeline-dot" style="background:${cfg.border};color:#fff;">${cfg.icon}</div>
+      <div class="timeline-content" style="background:${cfg.color};border-radius:8px;padding:8px 12px;margin-bottom:6px;">
+        <div class="timeline-time">${dt}</div>
+        <div class="timeline-desc">${ev.desc}</div>
+        <div class="timeline-who">por <strong>${ev.who}</strong></div>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+// Carrega timeline ao clicar na aba
+function switchModalTab(tab) {
+  _switchModalTabBase(tab);
+  if(tab === 'timeline' && currentChecklistClient) {
+    renderTimeline(currentChecklistClient.pasta);
+  }
+}
+
+// ==================== SCORE DE ENGAJAMENTO SEMANAL ====================
+// Pontuação: visualização=1pt · contato=3pt · ajuizamento=10pt · análise=5pt · acesso=1pt/dia
+function _calcularScoreSemanal() {
+  const { realizado } = _calcularSemanaAtual();
+  const scores = {};
+  for(const [short, r] of Object.entries(realizado)) {
+    scores[short] = (r.visualizacoes||0)*1 + (r.contatos||0)*3 +
+                    (r.ajuizamentos||0)*10 + (r.analises||0)*5;
+  }
+  return scores;
+}
+
+// Injeta badge de score semanal no ranking
+// Score semanal injetado em renderRanking abaixo
 function renderRanking() {
+  _renderRankingBase();
+  // Adiciona score semanal nos cards do ranking
+  const scores = _calcularScoreSemanal();
+  const list = document.getElementById('ranking-list');
+  if(!list) return;
+  Object.entries(KANBAN_DATA.responsaveis).forEach(([rname, rdata]) => {
+    const sc = scores[rdata.short] || 0;
+    // Insere badge de score semanal após o nome no card (procura pelo texto do nome)
+    const cards = list.querySelectorAll('.rank-card');
+    cards.forEach(card => {
+      const nameEl = card.querySelector('.rank-name');
+      if(nameEl && nameEl.textContent.trim() === displayName(rname)) {
+        if(!card.querySelector('.score-semanal')) {
+          const badge = document.createElement('span');
+          badge.className = 'score-semanal score-badge';
+          badge.style.cssText = 'margin-left:8px;font-size:10px;';
+          badge.textContent = '⚡ ' + sc + ' pts/semana';
+          nameEl.appendChild(badge);
+        }
+      }
+    });
+  });
+  // Adiciona legenda de pontuação abaixo do ranking
+  if(!document.getElementById('score-legenda')) {
+    const leg = document.createElement('div');
+    leg.id = 'score-legenda';
+    leg.style.cssText = 'font-size:11px;color:var(--text3);padding:8px 0;text-align:center;';
+    leg.innerHTML = '⚡ Score semanal: Visualização +1pt · Contato +3pt · Ajuizamento +10pt · Análise (est.) +5pt';
+    list.appendChild(leg);
+  }
+}
+
+// ==================== CONFIRMAÇÃO DE LEITURA DE COBRANÇAS ====================
+let _cobrancaAtiva = null;
+
+// Gestor envia cobrança — fica gravada no Firestore, aparece para todos ao abrir
+function enviarCobrancaAtiva() {
+  const { realizado } = _calcularSemanaAtual();
+  const metas = _getMetas();
+  const METRICAS = ['contatos','ajuizamentos','visualizacoes','analises'];
+  const LABELS   = { contatos:'contatos', ajuizamentos:'ajuizamentos', visualizacoes:'pastas abertas', analises:'análises' };
+
+  // Monta lista de pendentes
+  const PESSOAS = [
+    ...Object.entries(KANBAN_DATA.responsaveis).map(([k,v])=>({ short:v.short, display:v.name, tipo:'adv' })),
+    { short:'Julia', display:'Julia', tipo:'est' },
+    { short:'Matheus', display:'Matheus', tipo:'est' },
+  ];
+  const pendentes = PESSOAS.filter(p => {
+    const r = realizado[p.short] || {};
+    const m = metas[p.tipo] || METAS_DEFAULT.adv;
+    return METRICAS.some(k => m[k] > 0 && (r[k]||0) < m[k]);
+  }).map(p => p.display.split(' ')[0]);
+
+  const { inicioSemana, fimSemana } = _calcularSemanaAtual();
+  const fmt = d => d.toLocaleDateString('pt-BR');
+  const msg = pendentes.length > 0
+    ? `Atenção ${pendentes.join(', ')}: há metas da semana (${fmt(inicioSemana)}–${fmt(fimSemana)}) ainda não atingidas. Por favor, atualize o sistema.`
+    : `Lembrete semanal (${fmt(inicioSemana)}–${fmt(fimSemana)}): mantenham o sistema atualizado! Todas as atividades devem ser registradas.`;
+
+  const cobranca = {
+    msg,
+    titulo: '📣 Cobrança do Gestor',
+    de: _currentUser?.displayName || 'Gestor',
+    ts: new Date().toISOString(),
+    id: 'cobranca_' + Date.now(),
+    confirmados: [],
+  };
+
+  if(_firestoreReady) {
+    db.collection('sistema').doc('cobranca_ativa').set(cobranca)
+      .then(() => notify('📣 Cobrança enviada! Todos verão ao abrir o sistema.'))
+      .catch(() => notify('Erro ao enviar cobrança.'));
+  }
+  _cobrancaAtiva = cobranca;
+  notify('📣 Cobrança enviada para todos os colaboradores!');
+}
+
+// Verifica se há cobrança ativa não lida pelo usuário atual
+async function _verificarCobrancaAtiva() {
+  if(!_firestoreReady || !_currentUser) return;
+  try {
+    const doc = await db.collection('sistema').doc('cobranca_ativa').get();
+    if(!doc.exists) return;
+    const c = doc.data();
+    if(!c || !c.id || !c.msg) return;
+    const confirmados = c.confirmados || [];
+    // Se já confirmou, não mostra
+    if(confirmados.includes(_currentUser.login)) return;
+    // Mostra banner
+    _cobrancaAtiva = c;
+    document.getElementById('cobranca-banner-title').textContent = c.titulo || 'Mensagem do Gestor';
+    document.getElementById('cobranca-banner-msg').textContent = c.msg;
+    document.getElementById('cobranca-banner-meta').textContent =
+      `De: ${c.de || 'Gestor'} · ${c.ts ? new Date(c.ts).toLocaleString('pt-BR') : ''}`;
+    document.getElementById('cobranca-banner').classList.add('show');
+  } catch {}
+}
+
+async function confirmarLeituraCobranca() {
+  document.getElementById('cobranca-banner').classList.remove('show');
+  if(!_cobrancaAtiva || !_firestoreReady || !_currentUser) return;
+  const confirmados = _cobrancaAtiva.confirmados || [];
+  if(!confirmados.includes(_currentUser.login)) confirmados.push(_currentUser.login);
+  await db.collection('sistema').doc('cobranca_ativa').update({ confirmados })
+    .catch(()=>{});
+  notify('✅ Confirmação registrada.');
+  // Gestor vê quem já confirmou
+  if(_currentUser.role === 'gestor') {
+    const todos = USUARIOS.filter(u=>u.role!=='gestor').length;
+    notify(`✅ ${confirmados.length}/${todos} pessoas confirmaram a leitura.`);
+  }
+}
+
+// ==================== FIM SISTEMAS DE CONTROLE ====================
+
+function _renderRankingBase() {
   const list = document.getElementById('ranking-list');
   if(!list) return;
 
@@ -4463,6 +5033,8 @@ async function _init() {
 
   // Registra acesso agora que Firestore está pronto
   if(_currentUser) _registrarAcesso(_currentUser);
+  // Verifica cobrança ativa não lida
+  setTimeout(_verificarCobrancaAtiva, 2000);
 
   renderDashboard();
   renderActivityLog();
@@ -4497,6 +5069,7 @@ async function _arranque() {
   try {
     await loadAllStatesFromFirestore();
     await _carregarSenhas();
+    await _carregarMetas();
     subscribeToRealtime();
   } catch {}
 
