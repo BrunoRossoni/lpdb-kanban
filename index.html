@@ -4069,7 +4069,7 @@ const METAS_DEFAULT = {
   // Metas INDIVIDUAIS por papel
   adv:   { visualizacoes: 20, analises: 0  },
   cx:    { visualizacoes: 20, analises: 0  },
-  est:   { visualizacoes: 10, analises: 10 },
+  est:   { visualizacoes: 10, analises: 0  },
 };
 let _metasCache = null;
 
@@ -4203,209 +4203,208 @@ function openMetasPanel() {
 
 function renderMetasPanel() {
   const { realizado, duplaMap, inicioSemana, fimSemana } = _calcularSemanaAtual();
-  const metas = _getMetas();
-  const fmt = d => d.toLocaleDateString('pt-BR', { day:'2-digit', month:'2-digit' });
-  document.getElementById('metas-semana-label').textContent =
-    `Semana: ${fmt(inicioSemana)} – ${fmt(fimSemana)}  ·  Contatos da dupla incluem titular + CX + estagiário  ·  Ajuizamentos creditados ao titular`;
-
-  const DONE = ['ajuizado','incomunicavel','encerrado','reativado'];
+  const metas  = _getMetas();
   const mDupla = metas.dupla || METAS_DEFAULT.dupla;
   const mAdv   = metas.adv   || METAS_DEFAULT.adv;
   const mCX    = metas.cx    || METAS_DEFAULT.cx;
   const mEst   = metas.est   || METAS_DEFAULT.est;
+  const DONE   = ['ajuizado','incomunicavel','encerrado','reativado'];
+  const fmt    = d => d.toLocaleDateString('pt-BR', {day:'2-digit', month:'2-digit'});
+
+  document.getElementById('metas-semana-label').textContent =
+    `Semana: ${fmt(inicioSemana)} – ${fmt(fimSemana)}  ·  Contatos da dupla = titular + CX + estagiário  ·  Ajuizamentos = pastas da carteira do titular`;
 
   const DUPLAS = [
-    { titShort:'Bruno',    titName:'Bruno Peres Rossoni',          cx:'Alice',     est:'Julia'   },
-    { titShort:'Douglas',  titName:'Douglas Leandro da Silva',     cx:'Franciele', est:'Julia'   },
-    { titShort:'Stalin',   titName:'Stalin de Lima Lauser',        cx:'Camila',    est:'Julia'   },
-    { titShort:'Fernando', titName:'Fernando de Gonzalez e Silva', cx:'Adriane',   est:'Matheus' },
-    { titShort:'Janaina',  titName:'Janaina Minetto',              cx:'Larissa',   est:'Matheus' },
-    { titShort:'Vitoria',  titName:'Vitoria Dei Ricardi Weber',    cx:'Bibiana',   est:'Matheus' },
+    { titShort:'Bruno',    cx:'Alice',     est:'Julia'   },
+    { titShort:'Douglas',  cx:'Franciele', est:'Julia'   },
+    { titShort:'Stalin',   cx:'Camila',    est:'Julia'   },
+    { titShort:'Fernando', cx:'Adriane',   est:'Matheus' },
+    { titShort:'Janaina',  cx:'Larissa',   est:'Matheus' },
+    { titShort:'Vitoria',  cx:'Bibiana',   est:'Matheus' },
   ];
 
-  // Análises dos estagiários
-  const estAnalises = {};
-  for(const [internName, pastas] of Object.entries(KANBAN_DATA.estagiarios || {})) {
-    estAnalises[internName] = {
+  // Análises dos estagiários via Firestore
+  const estA = {};
+  for(const [name, pastas] of Object.entries(KANBAN_DATA.estagiarios || {})) {
+    estA[name] = {
       total: pastas.length,
       concluidas: pastas.filter(c => getClientState(c.pasta).internStatus === 'concluido').length,
     };
   }
 
-  // ── Helpers ──────────────────────────────────────────────────────────
-  function _bar(val, meta) {
-    const pct = Math.min(100, meta > 0 ? Math.round(val/meta*100) : 0);
-    const col = pct >= 100 ? '#3B6D11' : pct >= 50 ? '#854F0B' : '#A32D2D';
-    return `<div style="height:5px;background:var(--border);border-radius:3px;margin-top:4px;">
-      <div style="height:5px;width:${pct}%;background:${col};border-radius:3px;transition:width .4s;"></div></div>`;
-  }
-  function _numColor(val, meta) {
-    if(meta === 0) return 'var(--text3)';
-    return val >= meta ? 'var(--green)' : val > 0 ? 'var(--accent2)' : 'var(--red)';
-  }
-  function _semaforo(checks) { // [[val,meta], ...]
-    const ativos = checks.filter(([,m]) => m > 0);
-    if(!ativos.length) return '⚪';
-    const ok = ativos.filter(([v,m]) => v >= m).length;
-    const pct = ok / ativos.length;
-    return pct >= 1 ? '🟢' : pct >= 0.5 ? '🟡' : '🔴';
-  }
-  function _tag(checks) {
-    const ativos = checks.filter(([,m]) => m > 0);
-    if(!ativos.length) return '';
-    const ok = ativos.filter(([v,m]) => v >= m).length;
-    const pct = ok / ativos.length;
-    const [bg, fg, txt] = pct >= 1
-      ? ['#EAF3DE','#3B6D11','Meta atingida']
-      : pct >= 0.5
-        ? ['#FAEEDA','#854F0B','Parcial']
-        : ['#FCEBEB','#A32D2D','Abaixo'];
-    return `<span style="font-size:10px;padding:2px 8px;border-radius:10px;font-weight:500;background:${bg};color:${fg};">${txt}</span>`;
-  }
-  function _celNum(val, meta, dim=false) {
-    if(dim) return `<span style="color:var(--text3);font-size:12px;">—</span>`;
-    const col = _numColor(val, meta);
-    return `<span style="font-family:'DM Serif Display';font-size:16px;color:${col};">${val}</span>`
-         + (meta > 0 ? `<span style="font-size:10px;color:var(--text3);margin-left:2px;">/${meta}</span>` : '');
+  // ── Helpers ────────────────────────────────────────────────────────
+  const _col = (v,m) => m===0 ? 'var(--text3)' : v>=m ? 'var(--green)' : v>0 ? 'var(--accent2)' : 'var(--red)';
+
+  function _bar(v, m) {
+    const pct = Math.min(100, m>0 ? Math.round(v/m*100) : 0);
+    const c = pct>=100 ? '#3B6D11' : pct>=50 ? '#854F0B' : '#A32D2D';
+    return `<div style="height:5px;background:rgba(255,255,255,.3);border-radius:3px;margin-top:3px;width:80px;">
+      <div style="height:5px;width:${pct}%;background:#fff;border-radius:3px;opacity:${pct>=100?1:.85};"></div></div>`;
   }
 
-  // ── HTML ──────────────────────────────────────────────────────────────
+  function _num(v, m, dim) {
+    if(dim) return `<span style="color:var(--text3);">—</span>`;
+    const c = _col(v,m);
+    return `<span style="font-family:'DM Serif Display';font-size:17px;color:${c};">${v}</span>`
+         + (m>0 ? `<span style="font-size:10px;color:var(--text3);margin-left:1px;">/${m}</span>` : '');
+  }
+
+  function _contrib(v) { // número de contribuição sem meta
+    if(!v) return `<span style="color:var(--text3);font-size:12px;">0</span>`;
+    return `<span style="font-family:'DM Serif Display';font-size:17px;color:var(--text);">${v}</span>`;
+  }
+
+  function _tag(v, m) {
+    if(m===0) return '';
+    const pct = v/m;
+    const [bg,fg,t] = pct>=1 ? ['#EAF3DE','#3B6D11','✓ Meta'] : pct>=.5 ? ['#FAEEDA','#854F0B','Parcial'] : ['#FCEBEB','#A32D2D','Abaixo'];
+    return `<span style="font-size:10px;padding:2px 7px;border-radius:10px;background:${bg};color:${fg};font-weight:500;">${t}</span>`;
+  }
+
+  function _semTag(checks) { // [[v,m]...]
+    const at = checks.filter(([,m])=>m>0);
+    if(!at.length) return '';
+    const ok = at.filter(([v,m])=>v>=m).length;
+    const pct = ok/at.length;
+    const [bg,fg,t] = pct>=1 ? ['#EAF3DE','#3B6D11','✓ Meta atingida'] : pct>=.5 ? ['#FAEEDA','#854F0B','Parcial'] : ['#FCEBEB','#A32D2D','Abaixo da meta'];
+    return `<span style="font-size:10px;padding:2px 8px;border-radius:10px;background:${bg};color:${fg};font-weight:500;">${t}</span>`;
+  }
+
+  // ── Contatos do estagiário por dupla específica (pastas desta carteira) ──
+  function _contatosEstEmDupla(estName, titShort) {
+    const rdataE = Object.entries(KANBAN_DATA.responsaveis).find(([,v])=>v.short===titShort);
+    if(!rdataE) return 0;
+    const pastasDaDupla = new Set(Object.values(rdataE[1].sections).flat().map(c=>String(c.pasta)));
+    const hoje = new Date(), d0 = hoje.getDay()===0?6:hoje.getDay()-1;
+    const ini = new Date(hoje); ini.setDate(hoje.getDate()-d0); ini.setHours(0,0,0,0);
+    return (_logCache.entries||[]).filter(i =>
+      i.resp===estName && i.type==='contato' && i.ts && new Date(i.ts)>=ini
+      && pastasDaDupla.has(String(i.pasta||''))
+    ).length;
+  }
+
+  // ── Gera HTML ──────────────────────────────────────────────────────
   let html = '';
-  const estRendered = {};
 
   for(const d of DUPLAS) {
-    const rTit  = realizado[d.titShort] || {};
-    const rCX   = realizado[d.cx]       || {};
-    const rEst  = realizado[d.est]      || {};
-    const rDup  = duplaMap[d.titShort]  || { contatos:0, ajuizamentos:0, detalhe:{} };
-    const estA  = estAnalises[d.est]    || { total:0, concluidas:0 };
+    const rTit = realizado[d.titShort] || {};
+    const rCX  = realizado[d.cx]       || {};
+    const rEst = realizado[d.est]      || {};
+    const rDup = duplaMap[d.titShort]  || { contatos:0, ajuizamentos:0, detalhe:{} };
+    const ea   = estA[d.est]           || { total:0, concluidas:0 };
 
-    // Pastas ativas do titular
     const rdataE = Object.entries(KANBAN_DATA.responsaveis).find(([,v])=>v.short===d.titShort);
     const rdata  = rdataE?.[1];
     const ativas = rdata ? Object.values(rdata.sections).flat()
       .filter(c=>!DONE.includes(getClientState(c.pasta).status||'')).length : 0;
-    const delegadasCX = Object.values(KANBAN_DATA.responsaveis).flatMap(r=>Object.values(r.sections).flat())
-      .filter(c => getClientState(c.pasta).delegadoPara === d.cx).length;
+    const delegCX = Object.values(KANBAN_DATA.responsaveis).flatMap(r=>Object.values(r.sections).flat())
+      .filter(c=>getClientState(c.pasta).delegadoPara===d.cx).length;
 
-    // Detalhe de contatos por membro dentro da dupla
-    const det = rDup.detalhe || {};
-    const detTit = det[d.titShort] || { contatos:0, ajuizamentos:0 };
-    const detCX  = det[d.cx]       || { contatos:0, ajuizamentos:0 };
-    const detEst = det[d.est]      || { contatos:0, ajuizamentos:0 };
+    const det    = rDup.detalhe || {};
+    const dTit   = det[d.titShort] || { contatos:0, ajuizamentos:0 };
+    const dCX    = det[d.cx]       || { contatos:0, ajuizamentos:0 };
+    const cEst   = _contatosEstEmDupla(d.est, d.titShort);
 
-    const cTotal  = rDup.contatos;
-    const ajTotal = rDup.ajuizamentos;
-    const semDupla = _semaforo([[cTotal, mDupla.contatos],[ajTotal, mDupla.ajuizamentos]]);
+    const cTotal  = rDup.contatos;     // titular + CX + estagiário
+    const ajTotal = rDup.ajuizamentos; // ajuizamentos das pastas desta carteira
 
-    // ── Card da dupla ───────────────────────────────────────────
-    html += `<div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);overflow:hidden;margin-bottom:16px;">
+    const semDup = (()=>{
+      const at = [[cTotal,mDupla.contatos],[ajTotal,mDupla.ajuizamentos]].filter(([,m])=>m>0);
+      if(!at.length) return '⚪';
+      const ok = at.filter(([v,m])=>v>=m).length;
+      return ok===at.length ? '🟢' : ok>0 ? '🟡' : '🔴';
+    })();
 
-      <!-- Cabeçalho da dupla -->
-      <div style="background:var(--accent);padding:10px 16px;display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;">
-        <div>
-          <span style="color:#fff;font-weight:700;font-size:14px;">⚖️ ${d.titShort} + ${d.cx}</span>
-          <span style="color:rgba(255,255,255,.6);font-size:11px;margin-left:10px;">Est: ${d.est} · ${ativas} pastas ativas</span>
-        </div>
-        <div style="display:flex;gap:12px;align-items:center;">
-          <div style="text-align:center;">
-            <div style="color:rgba(255,255,255,.7);font-size:10px;text-transform:uppercase;letter-spacing:.04em;">Contatos dupla</div>
-            <div style="color:#fff;font-family:'DM Serif Display';font-size:22px;line-height:1.1;">${cTotal}<span style="font-size:12px;opacity:.6;">/${mDupla.contatos}</span></div>
-            ${_bar(cTotal, mDupla.contatos)}
-          </div>
-          <div style="text-align:center;">
-            <div style="color:rgba(255,255,255,.7);font-size:10px;text-transform:uppercase;letter-spacing:.04em;">Ajuizamentos</div>
-            <div style="color:#fff;font-family:'DM Serif Display';font-size:22px;line-height:1.1;">${ajTotal}<span style="font-size:12px;opacity:.6;">/${mDupla.ajuizamentos}</span></div>
-            ${_bar(ajTotal, mDupla.ajuizamentos)}
-          </div>
-          <div style="font-size:28px;">${semDupla}</div>
-        </div>
+    html += `
+<div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);overflow:hidden;margin-bottom:20px;box-shadow:var(--shadow);">
+
+  <!-- ── Cabeçalho: metas da DUPLA ── -->
+  <div style="background:var(--accent);padding:12px 18px;display:flex;align-items:flex-start;justify-content:space-between;gap:16px;flex-wrap:wrap;">
+    <div>
+      <div style="color:#fff;font-weight:700;font-size:15px;">⚖️ ${d.titShort} <span style="opacity:.7;font-weight:400;">+</span> ${d.cx}
+        <span style="font-size:11px;font-weight:400;opacity:.6;margin-left:8px;">Est: ${d.est}</span>
       </div>
+      <div style="color:rgba(255,255,255,.6);font-size:11px;margin-top:2px;">${ativas} pastas ativas · ${delegCX} delegadas ao CX</div>
+    </div>
+    <div style="display:flex;gap:20px;align-items:flex-start;">
+      <div>
+        <div style="color:rgba(255,255,255,.7);font-size:10px;text-transform:uppercase;letter-spacing:.05em;">Contatos dupla</div>
+        <div style="color:#fff;font-family:'DM Serif Display';font-size:24px;line-height:1;">${cTotal}<span style="font-size:12px;opacity:.5;">/${mDupla.contatos}</span></div>
+        ${_bar(cTotal, mDupla.contatos)}
+        <div style="color:rgba(255,255,255,.6);font-size:10px;margin-top:3px;">${_tag(cTotal,mDupla.contatos).replace(/color:#[0-9A-Fa-f]+/g,'color:#fff').replace(/background:#[0-9A-Fa-f]+/g,'background:rgba(255,255,255,.2)')}</div>
+      </div>
+      <div>
+        <div style="color:rgba(255,255,255,.7);font-size:10px;text-transform:uppercase;letter-spacing:.05em;">Ajuizamentos</div>
+        <div style="color:#fff;font-family:'DM Serif Display';font-size:24px;line-height:1;">${ajTotal}<span style="font-size:12px;opacity:.5;">/${mDupla.ajuizamentos}</span></div>
+        ${_bar(ajTotal, mDupla.ajuizamentos)}
+        <div style="color:rgba(255,255,255,.6);font-size:10px;margin-top:3px;">${_tag(ajTotal,mDupla.ajuizamentos).replace(/color:#[0-9A-Fa-f]+/g,'color:#fff').replace(/background:#[0-9A-Fa-f]+/g,'background:rgba(255,255,255,.2)')}</div>
+      </div>
+      <div style="font-size:32px;line-height:1;align-self:center;">${semDup}</div>
+    </div>
+  </div>
 
-      <!-- Tabela de membros -->
-      <table style="width:100%;border-collapse:collapse;font-size:12px;">
-        <thead>
-          <tr style="background:var(--surface2);color:var(--text3);">
-            <th style="padding:6px 14px;text-align:left;font-weight:600;font-size:11px;">Membro</th>
-            <th style="padding:6px 10px;text-align:center;font-weight:600;font-size:11px;">Contatos<br><span style="font-weight:400;font-size:10px;">contribuição</span></th>
-            <th style="padding:6px 10px;text-align:center;font-weight:600;font-size:11px;">Ajuizamentos<br><span style="font-weight:400;font-size:10px;">pasta do titular</span></th>
-            <th style="padding:6px 10px;text-align:center;font-weight:600;font-size:11px;">Visualizações<br><span style="font-weight:400;font-size:10px;">meta individual</span></th>
-            <th style="padding:6px 10px;text-align:center;font-weight:600;font-size:11px;">Análises<br><span style="font-weight:400;font-size:10px;">estagiário</span></th>
-            <th style="padding:6px 10px;text-align:center;font-weight:600;font-size:11px;">Status</th>
-          </tr>
-        </thead>
-        <tbody>
+  <!-- ── Tabela: detalhamento por membro ── -->
+  <table style="width:100%;border-collapse:collapse;font-size:12px;">
+    <thead>
+      <tr style="background:var(--surface2);">
+        <th style="padding:7px 14px;text-align:left;font-size:11px;font-weight:600;color:var(--text3);width:160px;">Membro</th>
+        <th style="padding:7px 10px;text-align:center;font-size:11px;font-weight:600;color:var(--text3);">Contatos<br><span style="font-size:9px;font-weight:400;">contribuição p/ dupla</span></th>
+        <th style="padding:7px 10px;text-align:center;font-size:11px;font-weight:600;color:var(--text3);">Ajuizamentos<br><span style="font-size:9px;font-weight:400;">carteira do titular</span></th>
+        <th style="padding:7px 10px;text-align:center;font-size:11px;font-weight:600;color:var(--text3);">Visualizações<br><span style="font-size:9px;font-weight:400;">meta individual</span></th>
+        <th style="padding:7px 10px;text-align:center;font-size:11px;font-weight:600;color:var(--text3);">Análises<br><span style="font-size:9px;font-weight:400;">estagiário</span></th>
+        <th style="padding:7px 10px;text-align:center;font-size:11px;font-weight:600;color:var(--text3);">Status</th>
+      </tr>
+    </thead>
+    <tbody>
 
-          <!-- Titular -->
-          <tr style="border-bottom:1px solid var(--border);">
-            <td style="padding:10px 14px;">
-              <div style="font-weight:700;font-size:13px;">${d.titShort}</div>
-              <div style="font-size:10px;color:var(--text3);">Advogado titular</div>
-            </td>
-            <td style="padding:10px;text-align:center;">${_celNum(detTit.contatos, 0)}</td>
-            <td style="padding:10px;text-align:center;">${_celNum(detTit.ajuizamentos+rTit.ajuizamentos, mAdv.ajuizamentos||0)}</td>
-            <td style="padding:10px;text-align:center;">${_celNum(rTit.visualizacoes||0, mAdv.visualizacoes)}</td>
-            <td style="padding:10px;text-align:center;">${_celNum(0, 0, true)}</td>
-            <td style="padding:10px;text-align:center;">
-              ${_tag([[rTit.visualizacoes||0, mAdv.visualizacoes]])}
-            </td>
-          </tr>
+      <!-- Titular -->
+      <tr style="border-bottom:1px solid var(--border);">
+        <td style="padding:10px 14px;">
+          <div style="font-weight:700;font-size:13px;">${d.titShort}</div>
+          <div style="font-size:10px;color:var(--text3);">Titular · ${ativas} pastas</div>
+        </td>
+        <td style="padding:10px;text-align:center;">${_contrib(dTit.contatos)}</td>
+        <td style="padding:10px;text-align:center;">${_num(rTit.ajuizamentos||0, mAdv.ajuizamentos||0)}</td>
+        <td style="padding:10px;text-align:center;">${_num(rTit.visualizacoes||0, mAdv.visualizacoes)}</td>
+        <td style="padding:10px;text-align:center;color:var(--text3);">—</td>
+        <td style="padding:10px;text-align:center;">${_semTag([[rTit.ajuizamentos||0,mAdv.ajuizamentos||0],[rTit.visualizacoes||0,mAdv.visualizacoes]])}</td>
+      </tr>
 
-          <!-- CX -->
-          <tr style="border-bottom:1px solid var(--border);background:var(--surface2);">
-            <td style="padding:10px 14px;">
-              <div style="font-weight:600;font-size:13px;">${d.cx}</div>
-              <div style="font-size:10px;color:var(--text3);">Advogado CX · ${delegadasCX} delegadas</div>
-            </td>
-            <td style="padding:10px;text-align:center;">${_celNum(detCX.contatos, 0)}</td>
-            <td style="padding:10px;text-align:center;">${_celNum(0, 0, true)}</td>
-            <td style="padding:10px;text-align:center;">${_celNum(rCX.visualizacoes||0, mCX.visualizacoes)}</td>
-            <td style="padding:10px;text-align:center;">${_celNum(0, 0, true)}</td>
-            <td style="padding:10px;text-align:center;">
-              ${_tag([[rCX.visualizacoes||0, mCX.visualizacoes]])}
-            </td>
-          </tr>`;
+      <!-- CX -->
+      <tr style="border-bottom:1px solid var(--border);background:var(--surface2);">
+        <td style="padding:10px 14px;">
+          <div style="font-weight:600;font-size:13px;">${d.cx}</div>
+          <div style="font-size:10px;color:var(--text3);">CX da dupla · ${delegCX} delegadas</div>
+        </td>
+        <td style="padding:10px;text-align:center;">${_contrib(dCX.contatos)}</td>
+        <td style="padding:10px;text-align:center;color:var(--text3);">—</td>
+        <td style="padding:10px;text-align:center;">${_num(rCX.visualizacoes||0, mCX.visualizacoes)}</td>
+        <td style="padding:10px;text-align:center;color:var(--text3);">—</td>
+        <td style="padding:10px;text-align:center;">${_semTag([[rCX.visualizacoes||0,mCX.visualizacoes]])}</td>
+      </tr>
 
-    // ── Estagiário — aparece nas 3 duplas que atende, com contribuição específica ──
-    {
-      // Contatos que o estagiário fez especificamente nesta dupla
-      // (pastas desta carteira onde ele registrou contato)
-      const rdataPastas = rdata ? Object.values(rdata.sections).flat().map(c=>String(c.pasta)) : [];
-      const log = _logCache.entries || [];
-      const hoje2 = new Date();
-      const diasDesde2 = hoje2.getDay()===0?6:hoje2.getDay()-1;
-      const iniSem2 = new Date(hoje2); iniSem2.setDate(hoje2.getDate()-diasDesde2); iniSem2.setHours(0,0,0,0);
-      const contatosEstNestaDupla = log.filter(i =>
-        i.resp === d.est && i.type === 'contato' && i.ts && new Date(i.ts) >= iniSem2
-        && rdataPastas.includes(String(i.pasta||''))
-      ).length;
+      <!-- Estagiário -->
+      <tr style="border-bottom:1px solid var(--border);background:#EEEDFE;">
+        <td style="padding:10px 14px;">
+          <div style="font-weight:700;font-size:13px;color:#3C3489;">${d.est}</div>
+          <div style="font-size:10px;color:#534AB7;">Estagiário</div>
+          <div style="font-size:10px;color:#534AB7;font-weight:600;margin-top:2px;">${ea.concluidas}/${ea.total} análises</div>
+        </td>
+        <td style="padding:10px;text-align:center;">${_contrib(cEst)}</td>
+        <td style="padding:10px;text-align:center;color:var(--text3);">—</td>
+        <td style="padding:10px;text-align:center;">${_num(rEst.visualizacoes||0, mEst.visualizacoes)}</td>
+        <td style="padding:10px;text-align:center;">${_contrib(ea.concluidas)}<span style="font-size:10px;color:var(--text3);display:block;">/${ea.total} pastas</span></td>
+        <td style="padding:10px;text-align:center;">${_semTag([[rEst.visualizacoes||0,mEst.visualizacoes]])}</td>
+      </tr>
 
-      // Marca se já foi mostrado antes (para o campo "análises" — total, não por dupla)
-      const jaApareceAntes = estRendered[d.est];
-      estRendered[d.est] = true;
-      const duplas3 = DUPLAS.filter(dd=>dd.est===d.est).map(dd=>dd.titShort).join(', ');
-
-      html += `
-          <tr style="border-bottom:1px solid var(--border);background:#EEEDFE;">
-            <td style="padding:10px 14px;">
-              <div style="font-weight:700;font-size:13px;color:#3C3489;">${d.est}</div>
-              <div style="font-size:10px;color:#534AB7;">Estagiário · atua em: ${duplas3}</div>
-              ${!jaApareceAntes ? `<div style="font-size:10px;color:#534AB7;font-weight:600;">${estA.concluidas}/${estA.total} análises totais</div>` : ''}
-            </td>
-            <td style="padding:10px;text-align:center;">${_celNum(contatosEstNestaDupla, 0)}</td>
-            <td style="padding:10px;text-align:center;">${_celNum(0, 0, true)}</td>
-            <td style="padding:10px;text-align:center;">${!jaApareceAntes ? _celNum(rEst.visualizacoes||0, mEst.visualizacoes) : _celNum(0,0,true)}</td>
-            <td style="padding:10px;text-align:center;">${!jaApareceAntes ? _celNum(estA.concluidas, mEst.analises) : `<span style="font-size:10px;color:#534AB7;">veja acima</span>`}</td>
-            <td style="padding:10px;text-align:center;">
-              ${!jaApareceAntes ? _tag([[rEst.visualizacoes||0, mEst.visualizacoes],[estA.concluidas, mEst.analises]]) : ''}
-            </td>
-          </tr>`;
-
-    html += `</tbody></table></div>`;
+    </tbody>
+  </table>
+</div>`;
   }
 
   document.getElementById('metas-body').innerHTML = html;
-}
+} // fecha renderMetasPanel
+
 
 function openMetasConfig() {
   const metas = _getMetas();
@@ -4441,16 +4440,10 @@ function openMetasConfig() {
     ${inp('meta_cx_visualizacoes',  metas.cx?.visualizacoes  ?? METAS_DEFAULT.cx.visualizacoes)}
     ${inp('meta_est_visualizacoes', metas.est?.visualizacoes ?? METAS_DEFAULT.est.visualizacoes)}
   </div>
-  <div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:8px;align-items:center;margin-bottom:8px;">
-    <div style="font-size:12px;font-weight:600;color:var(--text);">Análises/sem. (est.)</div>
-    ${inp('meta_adv_analises', 0, true)}
-    ${inp('meta_cx_analises',  0, true)}
-    ${inp('meta_est_analises', metas.est?.analises ?? METAS_DEFAULT.est.analises)}
-  </div>
   <div style="font-size:11px;color:var(--text3);margin-top:6px;">
-    ℹ️ Contatos: conta tudo que titular, CX e estagiário fizeram juntos na semana.<br>
-    Ajuizamentos: soma das pastas ajuizadas da carteira do titular (por quem for).<br>
-    Visualizações e análises: metas individuais por papel.
+    ℹ️ Contatos: soma de tudo que titular, CX e estagiário fizeram juntos na semana.<br>
+    Ajuizamentos: pastas da carteira do titular ajuizadas por qualquer membro da dupla.<br>
+    Visualizações: meta individual por papel. Análises dos estagiários são exibidas como informação, sem meta.
   </div>`;
 
   document.getElementById('metas-config-rows').innerHTML = html;
@@ -4466,8 +4459,7 @@ async function salvarMetas() {
     adv: { visualizacoes: parseInt(document.getElementById('meta_adv_visualizacoes').value)||0, analises: 0, contatos: 0, ajuizamentos: 0 },
     cx:  { visualizacoes: parseInt(document.getElementById('meta_cx_visualizacoes').value)||0,  analises: 0, contatos: 0, ajuizamentos: 0 },
     est: { visualizacoes: parseInt(document.getElementById('meta_est_visualizacoes').value)||0,
-           analises:      parseInt(document.getElementById('meta_est_analises').value)||0,
-           contatos: 0, ajuizamentos: 0 },
+           analises: 0, contatos: 0, ajuizamentos: 0 },
   };
   _metasCache = novas;
   if(_firestoreReady) {
