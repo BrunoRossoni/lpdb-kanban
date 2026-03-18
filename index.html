@@ -1239,21 +1239,24 @@ body { font-family: "DM Sans", sans-serif; background: var(--bg); color: var(--t
 </div><!-- /main -->
 
 <!-- MODAL SENHA PRESENÇA -->
-<div class="modal-overlay" id="presence-auth-modal" style="display:none;align-items:center;justify-content:center;">
+<div class="modal-overlay" id="gestor-auth-modal" style="display:none;align-items:center;justify-content:center;">
   <div class="modal" style="max-width:400px;">
     <div class="modal-header" style="background:var(--accent);">
-      <div><div class="modal-title" style="color:#fff;">👁️ Painel de Presença</div>
-        <div class="modal-subtitle-h" style="color:rgba(255,255,255,0.7);">Acesso restrito ao gestor</div></div>
-      <button class="modal-close" onclick="document.getElementById('presence-auth-modal').style.display='none'">✕</button>
+      <div>
+        <div class="modal-title" style="color:#fff;" id="gestor-auth-titulo">🔐 Área do Gestor</div>
+        <div class="modal-subtitle-h" style="color:rgba(255,255,255,0.7);">Confirme sua senha para continuar</div>
+      </div>
+      <button class="modal-close" onclick="document.getElementById('gestor-auth-modal').style.display='none'">✕</button>
     </div>
     <div class="modal-body" style="padding:28px 24px;">
-      <p style="font-size:13px;color:var(--text2);margin-bottom:18px;">Digite a senha do gestor para ver o painel de presença.</p>
+      <p style="font-size:13px;color:var(--text2);margin-bottom:6px;" id="gestor-auth-desc">Digite sua senha de acesso.</p>
+      <p style="font-size:12px;color:var(--text3);margin-bottom:16px;" id="gestor-auth-user"></p>
       <div style="display:flex;gap:10px;">
-        <input type="password" id="presence-senha" class="field-input" placeholder="Senha do gestor" style="flex:1;"
-          onkeydown="if(event.key==='Enter')verificarSenhaPresenca()">
-        <button class="btn btn-primary" onclick="verificarSenhaPresenca()">Entrar</button>
+        <input type="password" id="gestor-auth-senha" class="field-input" placeholder="Sua senha" style="flex:1;"
+          onkeydown="if(event.key==='Enter')_confirmarGestorAuth()">
+        <button class="btn btn-primary" onclick="_confirmarGestorAuth()">Entrar</button>
       </div>
-      <div id="presence-senha-erro" style="color:var(--red);font-size:12px;margin-top:8px;display:none;">Senha incorreta.</div>
+      <div id="gestor-auth-erro" style="color:var(--red);font-size:12px;margin-top:8px;display:none;">Senha incorreta.</div>
     </div>
   </div>
 </div>
@@ -1633,8 +1636,8 @@ function computeStats() {
     else if(st === 'em_contato' && cs.steps && Object.values(cs.steps).some(Boolean)) contato++;
     else if(c.secao === 'aguardando_ajuizamento') aguard++;
     else if(c.secao === 'preparacao') {
-      // Exclui pastas que estagiário já concluiu como pronto_ajuizar (serão movidas na próxima aplicação)
-      const jaResolvida = cs.internStatus === 'concluido' && cs.internAcao === 'pronto_ajuizar';
+      // Só conta no KPI se não foi concluída pelo estagiário (qualquer ação concluída sai do número)
+      const jaResolvida = cs.internStatus === 'concluido';
       if(!jaResolvida) prep++;
     }
     else demais++;
@@ -2211,7 +2214,7 @@ function renderDuplas() {
       const prep   = rdata.sections.preparacao.filter(c => {
         if(DONE.includes(getClientState(c.pasta).status||'')) return false;
         const cs = getClientState(c.pasta);
-        return !(cs.internStatus === 'concluido' && cs.internAcao === 'pronto_ajuizar');
+        return cs.internStatus !== 'concluido'; // concluído pelo estagiário = sai do KPI
       }).length;
       const over150 = all.filter(c=>(c.dias||0)>150&&!DONE.includes(getClientState(c.pasta).status||'')).length;
       const pct = all.length > 0 ? Math.round(ajuiz/all.length*100) : 0;
@@ -3786,9 +3789,45 @@ function dismissAlertToday() {
 
 // ── PAINEL DE PRESENÇA (GESTOR) ─────────────────────────────────
 let presenceAuthorized = false;
+let _gestorAuthCallback = null; // função a chamar após auth bem-sucedida
+
+// Abre o modal unificado de autenticação do gestor
+function _pedirSenhaGestor(titulo, desc, callback) {
+  if(_currentUser?.role !== 'gestor') { notify('⛔ Acesso restrito ao gestor.'); return; }
+  _gestorAuthCallback = callback;
+  document.getElementById('gestor-auth-titulo').textContent = titulo;
+  document.getElementById('gestor-auth-desc').textContent = desc;
+  document.getElementById('gestor-auth-user').textContent =
+    '👤 Logado como: ' + (_currentUser?.displayName || '');
+  document.getElementById('gestor-auth-senha').value = '';
+  document.getElementById('gestor-auth-erro').style.display = 'none';
+  document.getElementById('gestor-auth-modal').style.display = 'flex';
+  setTimeout(() => document.getElementById('gestor-auth-senha').focus(), 100);
+}
+
+async function _confirmarGestorAuth() {
+  const senha = document.getElementById('gestor-auth-senha').value;
+  if(!senha) return;
+  // Verifica contra a senha do login do gestor (SHA-256 no Firestore)
+  const hash = await _sha256(senha);
+  const loginKey = _currentUser?.login;
+  // Recarrega cache de senhas se necessário
+  if(Object.keys(_senhasCache).length === 0) await _carregarSenhas();
+  const senhaCorreta = _senhasCache[loginKey] === hash;
+  if(senhaCorreta) {
+    document.getElementById('gestor-auth-modal').style.display = 'none';
+    presenceAuthorized = true;
+    if(_gestorAuthCallback) { _gestorAuthCallback(); _gestorAuthCallback = null; }
+  } else {
+    document.getElementById('gestor-auth-erro').style.display = 'block';
+    document.getElementById('gestor-auth-senha').value = '';
+    document.getElementById('gestor-auth-senha').focus();
+  }
+}
+
 function openPresencePanel() {
   if(_currentUser?.role !== 'gestor') { notify('⛔ Acesso restrito ao gestor.'); return; }
-  _abrirPresenca();
+  _pedirSenhaGestor('👁️ Painel de Presença', 'Confirme sua senha para acessar o painel de presença.', _abrirPresenca);
 }
 function _abrirPresenca() {
   renderPresence();
@@ -4002,6 +4041,26 @@ function _rastrearVisualizacao(pasta, nomeCliente, responsavel) {
   }, { merge: true }).catch(()=>{});
 }
 
+
+// ==================== ZERAR PREPARAÇÃO ====================
+// Marca todas as pastas em preparação como concluídas (internStatus=concluido, internAcao=aguardar)
+// Executado uma vez no _init para limpar o KPI do dashboard
+const _PREP_PASTAS = ["283220", "304065", "303880", "303835", "304173", "303869", "303824", "303752", "300254", "300103", "304106", "285617", "304174", "304066", "304133", "303881", "303851", "303843", "303389", "302894", "284813", "304075", "304062", "302538", "286297", "286436", "279599", "304175", "304067", "289869", "303562", "304072", "304091", "304068", "303885", "303852", "303823", "288778", "288775", "287515", "286729", "280393", "302971", "304138", "304069", "303882", "303840", "303745", "303739", "303735", "303612", "303555", "303458", "289403", "289222", "304132", "288152", "304063", "303809", "283879"];
+function _zerarPreparacaoKpi() {
+  let alteradas = 0;
+  for(const pastaId of _PREP_PASTAS) {
+    const cs = getClientState(pastaId);
+    if(!cs.internStatus || cs.internStatus === 'pendente') {
+      const novo = {...cs, internStatus:'concluido', internAcao:'aguardar',
+        internMotivo: cs.internMotivo || 'outro', updatedAt: new Date().toISOString()};
+      setClientState(pastaId, novo);
+      alteradas++;
+    }
+  }
+  if(alteradas > 0) console.log('[LPDB] Preparação zerada:', alteradas, 'pastas marcadas como concluídas');
+}
+// ==================== FIM ZERAR PREPARAÇÃO ====================
+
 // ==================== METAS SEMANAIS ====================
 // Estrutura: { contatos: N, ajuizamentos: N, visualizacoes: N, analises: N }
 const METAS_DEFAULT = {
@@ -4094,11 +4153,13 @@ function _calcularSemanaAtual() {
 
 function openMetasPanel() {
   if(_currentUser?.role !== 'gestor') { notify('⛔ Acesso restrito ao gestor.'); return; }
-  showPage('dashboard', null);
-  const panel = document.getElementById('metas-panel');
-  panel.style.display = 'block';
-  setTimeout(()=> panel.scrollIntoView({ behavior:'smooth', block:'start' }), 100);
-  renderMetasPanel();
+  _pedirSenhaGestor('🎯 Metas e Cobrança', 'Confirme sua senha para acessar o painel de metas e cobrança.', () => {
+    showPage('dashboard', null);
+    const panel = document.getElementById('metas-panel');
+    panel.style.display = 'block';
+    setTimeout(() => panel.scrollIntoView({ behavior:'smooth', block:'start' }), 100);
+    renderMetasPanel();
+  });
 }
 
 function renderMetasPanel() {
@@ -4106,96 +4167,161 @@ function renderMetasPanel() {
   const metas = _getMetas();
   const fmt = d => d.toLocaleDateString('pt-BR', { day:'2-digit', month:'2-digit' });
   document.getElementById('metas-semana-label').textContent =
-    `Semana atual: ${fmt(inicioSemana)} a ${fmt(fimSemana)} · Contatos e visualizações via log · Análises via status do Firestore`;
+    `Semana: ${fmt(inicioSemana)} – ${fmt(fimSemana)}  ·  Ajuizamentos creditados ao titular  ·  Análises via Firestore`;
 
-  const METRICA_LABELS = { contatos:'Contatos', ajuizamentos:'Ajuizamentos', visualizacoes:'Visualizações', analises:'Análises' };
-  const METRICAS = ['contatos','ajuizamentos','visualizacoes','analises'];
+  const DONE = ['ajuizado','incomunicavel','encerrado','reativado'];
 
-  // Agrupa: titulares + CX da dupla juntos, depois estagiários
-  const CX_PAIRS_ORDER = [
-    ['Bruno','Alice'],['Douglas','Franciele'],['Fernando','Adriane'],
-    ['Janaina','Larissa'],['Stalin','Camila'],['Vitoria','Bibiana'],
+  // Estrutura das duplas com estagiário compartilhado
+  const DUPLAS = [
+    { titShort:'Bruno',    titName:'Bruno Peres Rossoni',          cx:'Alice',     est:'Julia'   },
+    { titShort:'Douglas',  titName:'Douglas Leandro da Silva',     cx:'Franciele', est:'Julia'   },
+    { titShort:'Stalin',   titName:'Stalin de Lima Lauser',        cx:'Camila',    est:'Julia'   },
+    { titShort:'Fernando', titName:'Fernando de Gonzalez e Silva', cx:'Adriane',   est:'Matheus' },
+    { titShort:'Janaina',  titName:'Janaina Minetto',              cx:'Larissa',   est:'Matheus' },
+    { titShort:'Vitoria',  titName:'Vitoria Dei Ricardi Weber',    cx:'Bibiana',   est:'Matheus' },
   ];
-  const EST_ORDER = ['Julia','Matheus'];
 
-  function _buildRow(p, bgColor) {
-    const r = realizado[p.short] || { contatos:0, ajuizamentos:0, visualizacoes:0, analises:0, delegadas:0 };
-    const m = metas[p.tipo] || METAS_DEFAULT.adv;
-    const metricasAtivas = METRICAS.filter(k => m[k] > 0);
-    const atingidas = metricasAtivas.filter(k => (r[k]||0) >= m[k]).length;
-    const pct = metricasAtivas.length > 0 ? atingidas / metricasAtivas.length : 1;
-    const semaforo = pct >= 1 ? ['🟢','var(--green)','Meta atingida'] : pct >= 0.5 ? ['🟡','var(--accent2)','Parcial'] : ['🔴','var(--red)','Abaixo'];
+  // Métricas por estagiário: soma de análises em TODAS as pastas das 3 duplas que atende
+  const estAnalises = {};
+  for(const [internName, pastas] of Object.entries(KANBAN_DATA.estagiarios || {})) {
+    estAnalises[internName] = {
+      total: pastas.length,
+      concluidas: pastas.filter(c => getClientState(c.pasta).internStatus === 'concluido').length,
+    };
+  }
 
-    // Label de cargo e contexto
-    let roleLabel = '';
-    if(p.tipo === 'est') {
-      const totalAnalises = KANBAN_DATA.estagiarios?.[p.short]?.length || 0;
-      const concluidas = KANBAN_DATA.estagiarios?.[p.short]?.filter(c => {
-        const cs = getClientState(c.pasta); return cs.internStatus === 'concluido';
-      }).length || 0;
-      roleLabel = `${concluidas}/${totalAnalises} pastas analisadas`;
-    } else if(p.isCX) {
-      roleLabel = `dupla de ${p.advTitular} · ${r.delegadas||0} pasta${(r.delegadas||0)!==1?'s':''} delegadas`;
-    } else {
-      // Titular: mostra pastas ativas
-      const rdata = Object.values(KANBAN_DATA.responsaveis).find(rd=>rd.short===p.short);
-      const DONE = ['ajuizado','incomunicavel','encerrado','reativado'];
-      const ativas = rdata ? Object.values(rdata.sections).flat()
-        .filter(c=>!DONE.includes(getClientState(c.pasta).status||'')).length : 0;
-      roleLabel = `${ativas} pastas ativas`;
-    }
+  // Helper: célula de valor com semáforo
+  function _cel(val, meta, span=1) {
+    if(meta === 0) return `<td colspan="${span}" style="padding:8px 10px;text-align:center;color:var(--text3);font-size:13px;">—</td>`;
+    const ok = val >= meta;
+    const color = ok ? 'var(--green)' : val > 0 ? 'var(--accent2)' : 'var(--red)';
+    return `<td colspan="${span}" style="padding:8px 10px;text-align:center;">
+      <span style="font-family:'DM Serif Display';font-size:17px;color:${color};">${val}</span>
+      <span style="font-size:10px;color:var(--text3);display:block;">/ ${meta}</span>
+    </td>`;
+  }
 
-    let rowHtml = `<tr style="border-bottom:1px solid var(--border);${bgColor?'background:'+bgColor+';':''}">
+  // Helper: badge de status geral
+  function _status(vals, ms) {
+    const ativos = ms.filter((_,i) => ms[i] > 0);
+    const ok = ativos.filter((_,i) => vals[i] >= ativos[i]).length;
+    if(ativos.length === 0) return '⚪';
+    const pct = ok / ativos.length;
+    return pct >= 1 ? '🟢' : pct >= 0.5 ? '🟡' : '🔴';
+  }
+
+  let html = `<div style="overflow-x:auto;">
+  <table style="width:100%;border-collapse:collapse;font-size:12px;min-width:700px;">
+  <thead>
+    <tr style="background:var(--accent);color:#fff;">
+      <th rowspan="2" style="padding:10px 12px;text-align:left;min-width:130px;">Dupla / Membro</th>
+      <th colspan="2" style="padding:6px;text-align:center;border-left:1px solid rgba(255,255,255,.2);">Ajuizamentos</th>
+      <th colspan="2" style="padding:6px;text-align:center;border-left:1px solid rgba(255,255,255,.2);">Contatos</th>
+      <th colspan="2" style="padding:6px;text-align:center;border-left:1px solid rgba(255,255,255,.2);">Visualizações</th>
+      <th colspan="2" style="padding:6px;text-align:center;border-left:1px solid rgba(255,255,255,.2);">Análises</th>
+      <th rowspan="2" style="padding:6px;text-align:center;">Status</th>
+    </tr>
+    <tr style="background:var(--accent);color:rgba(255,255,255,.75);font-size:10px;">
+      <th style="padding:4px 6px;text-align:center;border-left:1px solid rgba(255,255,255,.2);">Feito</th><th style="padding:4px 6px;text-align:center;">Meta</th>
+      <th style="padding:4px 6px;text-align:center;border-left:1px solid rgba(255,255,255,.2);">Feito</th><th style="padding:4px 6px;text-align:center;">Meta</th>
+      <th style="padding:4px 6px;text-align:center;border-left:1px solid rgba(255,255,255,.2);">Feito</th><th style="padding:4px 6px;text-align:center;">Meta</th>
+      <th style="padding:4px 6px;text-align:center;border-left:1px solid rgba(255,255,255,.2);">Feito</th><th style="padding:4px 6px;text-align:center;">Meta</th>
+    </tr>
+  </thead><tbody>`;
+
+  const mAdv = metas.adv || METAS_DEFAULT.adv;
+  const mCX  = metas.cx  || METAS_DEFAULT.cx;
+  const mEst = metas.est || METAS_DEFAULT.est;
+
+  // Mapa estagiário → bloco já renderizado (para não duplicar)
+  const estRendered = {};
+
+  for(const d of DUPLAS) {
+    const rTit = realizado[d.titShort] || {};
+    const rCX  = realizado[d.cx]       || {};
+
+    // Pastas ativas do titular
+    const rdataEntry = Object.entries(KANBAN_DATA.responsaveis).find(([,v])=>v.short===d.titShort);
+    const rdata = rdataEntry?.[1];
+    const ativas = rdata ? Object.values(rdata.sections).flat()
+      .filter(c=>!DONE.includes(getClientState(c.pasta).status||'')).length : 0;
+    const delegadasCX = Object.values(KANBAN_DATA.responsaveis).flatMap(r=>Object.values(r.sections).flat())
+      .filter(c => getClientState(c.pasta).delegadoPara === d.cx).length;
+
+    // Estagiário desta dupla
+    const est = d.est;
+    const rEst = realizado[est] || {};
+    const estA = estAnalises[est] || { total:0, concluidas:0 };
+
+    // ── Linha separadora com nome da dupla ────────────────────
+    html += `<tr><td colspan="10" style="padding:8px 12px 3px;font-size:11px;font-weight:700;
+      color:var(--text3);text-transform:uppercase;letter-spacing:.06em;
+      background:var(--surface2);border-top:2px solid var(--border);">
+      ⚖️ Dupla ${d.titShort} + ${d.cx}
+      <span style="font-weight:400;font-size:10px;margin-left:8px;">Est: ${est} · ${ativas} pastas ativas</span>
+    </td></tr>`;
+
+    // ── Linha: Titular ────────────────────────────────────────
+    html += `<tr style="border-bottom:1px solid var(--border);">
       <td style="padding:8px 12px;">
-        <div style="font-weight:600;font-size:13px;">${p.display.split(' ')[0]}</div>
-        <div style="font-size:10px;color:var(--text3);">${roleLabel}</div>
-      </td>`;
+        <div style="font-weight:700;font-size:13px;">${d.titShort}</div>
+        <div style="font-size:10px;color:var(--text3);">Titular · ${ativas} pastas</div>
+      </td>
+      ${_cel(rTit.ajuizamentos||0, mAdv.ajuizamentos)}
+      ${_cel(rTit.contatos||0,     mAdv.contatos)}
+      ${_cel(rTit.visualizacoes||0,mAdv.visualizacoes)}
+      <td style="padding:8px 10px;text-align:center;color:var(--text3);font-size:13px;">—</td>
+      <td style="padding:8px 10px;text-align:center;">
+        <span style="font-size:16px;">${_status(
+          [rTit.ajuizamentos||0, rTit.contatos||0, rTit.visualizacoes||0],
+          [mAdv.ajuizamentos,    mAdv.contatos,    mAdv.visualizacoes]
+        )}</span>
+      </td>
+    </tr>`;
 
-    for(const met of METRICAS) {
-      const val = r[met] || 0;
-      const meta = m[met];
-      const ok = meta === 0 || val >= meta;
-      const color = meta === 0 ? 'var(--text3)' : ok ? 'var(--green)' : val > 0 ? 'var(--accent2)' : 'var(--red)';
-      rowHtml += `<td style="padding:8px 12px;text-align:center;">
-        <span style="font-family:'DM Serif Display';font-size:18px;color:${color};">${val}</span>
-        ${meta > 0 ? `<span style="font-size:10px;color:var(--text3);display:block;">/ ${meta}</span>` : '<span style="font-size:10px;color:var(--text3);display:block;">—</span>'}
-      </td>`;
+    // ── Linha: CX ─────────────────────────────────────────────
+    html += `<tr style="border-bottom:1px solid var(--border);background:var(--surface2);">
+      <td style="padding:8px 12px;">
+        <div style="font-weight:600;font-size:13px;">${d.cx}</div>
+        <div style="font-size:10px;color:var(--text3);">CX da dupla · ${delegadasCX} delegadas</div>
+      </td>
+      <td style="padding:8px 10px;text-align:center;color:var(--text3);font-size:13px;">—</td>
+      ${_cel(rCX.contatos||0,     mCX.contatos)}
+      ${_cel(rCX.visualizacoes||0,mCX.visualizacoes)}
+      <td style="padding:8px 10px;text-align:center;color:var(--text3);font-size:13px;">—</td>
+      <td style="padding:8px 10px;text-align:center;">
+        <span style="font-size:16px;">${_status(
+          [rCX.contatos||0, rCX.visualizacoes||0],
+          [mCX.contatos,    mCX.visualizacoes]
+        )}</span>
+      </td>
+    </tr>`;
+
+    // ── Linha: Estagiário (uma vez por grupo Julia/Matheus) ───
+    if(!estRendered[est]) {
+      estRendered[est] = true;
+      const duplas3 = DUPLAS.filter(dd=>dd.est===est).map(dd=>dd.titShort).join(', ');
+      html += `<tr style="border-bottom:2px solid var(--border);background:var(--purple-bg,#f5f0ff);">
+        <td style="padding:8px 12px;">
+          <div style="font-weight:700;font-size:13px;">${est}</div>
+          <div style="font-size:10px;color:var(--text3);">Estagiário · atua em: ${duplas3}</div>
+          <div style="font-size:10px;color:var(--purple,#5b3fa0);font-weight:600;">${estA.concluidas}/${estA.total} análises concluídas</div>
+        </td>
+        <td colspan="2" style="padding:8px 10px;text-align:center;color:var(--text3);">—</td>
+        ${_cel(rEst.contatos||0,     mEst.contatos)}
+        ${_cel(rEst.visualizacoes||0,mEst.visualizacoes)}
+        ${_cel(estA.concluidas,       mEst.analises)}
+        <td style="padding:8px 10px;text-align:center;">
+          <span style="font-size:16px;">${_status(
+            [rEst.contatos||0, rEst.visualizacoes||0, estA.concluidas],
+            [mEst.contatos,    mEst.visualizacoes,    mEst.analises]
+          )}</span>
+        </td>
+      </tr>`;
     }
-    rowHtml += `<td style="padding:8px 12px;text-align:center;">
-      <span style="font-size:16px;">${semaforo[0]}</span>
-      <span style="font-size:10px;color:${semaforo[1]};display:block;font-weight:600;">${semaforo[2]}</span>
-    </td></tr>`;
-    return rowHtml;
   }
 
-  let html = `<table style="width:100%;border-collapse:collapse;font-size:12px;">
-    <thead><tr style="background:var(--surface2);">
-      <th style="padding:8px 12px;text-align:left;font-weight:700;color:var(--text2);">Colaborador</th>
-      ${METRICAS.map(m=>`<th style="padding:8px 12px;text-align:center;font-weight:700;color:var(--text2);">${METRICA_LABELS[m]}</th>`).join('')}
-      <th style="padding:8px 12px;text-align:center;font-weight:700;color:var(--text2);">Status</th>
-    </tr></thead><tbody>`;
-
-  // Duplas — titular + CX intercalados com separador
-  for(const [advShort, cxShort] of CX_PAIRS_ORDER) {
-    const pAdv = TODAS_PESSOAS.find(p => p.short === advShort);
-    const pCX  = TODAS_PESSOAS.find(p => p.short === cxShort);
-    html += `<tr><td colspan="6" style="padding:6px 12px 2px;font-size:10px;font-weight:700;color:var(--text3);text-transform:uppercase;letter-spacing:.06em;background:var(--surface2);">
-      Dupla ${advShort} / ${cxShort}
-    </td></tr>`;
-    if(pAdv) html += _buildRow(pAdv, '');
-    if(pCX)  html += _buildRow(pCX,  'var(--surface2)');
-  }
-
-  // Estagiários
-  html += `<tr><td colspan="6" style="padding:6px 12px 2px;font-size:10px;font-weight:700;color:var(--text3);text-transform:uppercase;letter-spacing:.06em;background:var(--surface2);">
-    Estagiários
-  </td></tr>`;
-  for(const short of EST_ORDER) {
-    const p = TODAS_PESSOAS.find(p => p.short === short);
-    if(p) html += _buildRow(p, '');
-  }
-
-  html += '</tbody></table>';
+  html += `</tbody></table></div>`;
   document.getElementById('metas-body').innerHTML = html;
 }
 
@@ -4340,16 +4466,16 @@ const REL_SENHA_HASH = 'lpdb2026gestor'; // Senha em texto — troque aqui para 
 
 function openRelatorio() {
   if(_currentUser?.role !== 'gestor') { notify('⛔ Acesso restrito ao gestor.'); return; }
-  const m = document.getElementById('relatorio-modal');
-  m.style.display = 'flex';
-  // Gestor autenticado por role — pula tela de senha, abre direto na geração
-  document.getElementById('rel-login-view').style.display = 'none';
-  document.getElementById('rel-gen-view').style.display = 'block';
-  // Datas padrão: últimos 30 dias
-  const hoje = new Date();
-  const ini = new Date(hoje); ini.setDate(ini.getDate() - 30);
-  document.getElementById('rel-data-fim').value = hoje.toISOString().split('T')[0];
-  document.getElementById('rel-data-ini').value = ini.toISOString().split('T')[0];
+  _pedirSenhaGestor('📊 Relatório do Gestor', 'Confirme sua senha para gerar o relatório.', () => {
+    const m = document.getElementById('relatorio-modal');
+    m.style.display = 'flex';
+    document.getElementById('rel-login-view').style.display = 'none';
+    document.getElementById('rel-gen-view').style.display = 'block';
+    const hoje = new Date();
+    const ini = new Date(hoje); ini.setDate(ini.getDate() - 30);
+    document.getElementById('rel-data-fim').value = hoje.toISOString().split('T')[0];
+    document.getElementById('rel-data-ini').value = ini.toISOString().split('T')[0];
+  });
 }
 function closeRelatorio() {
   document.getElementById('relatorio-modal').style.display = 'none';
@@ -5334,6 +5460,8 @@ async function _init() {
 
   // Registra acesso agora que Firestore está pronto
   if(_currentUser) _registrarAcesso(_currentUser);
+  // Zera KPI de preparação (marca sem análise como concluídas)
+  _zerarPreparacaoKpi();
   // Verifica cobrança ativa não lida
   setTimeout(_verificarCobrancaAtiva, 2000);
 
