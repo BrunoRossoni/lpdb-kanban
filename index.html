@@ -893,6 +893,7 @@ body { font-family: "DM Sans", sans-serif; background: var(--bg); color: var(--t
       <div style="color:#fff;font-weight:600;font-size:14px;">🎯 Metas Semanais <span style="font-size:11px;font-weight:400;opacity:.7;">— semáforo de desempenho por pessoa</span></div>
       <div style="display:flex;gap:8px;align-items:center;">
         <button onclick="openMetasConfig()" style="background:rgba(255,255,255,0.15);border:none;color:#fff;border-radius:6px;padding:4px 12px;cursor:pointer;font-size:12px;">⚙️ Configurar metas</button>
+        <button onclick="transferirResponsabilidadeEmMassa()" style="background:rgba(255,140,0,0.8);border:none;color:#fff;border-radius:6px;padding:4px 12px;cursor:pointer;font-size:12px;font-weight:600;">🔁 Transferir responsabilidade (delegadas)</button>
         <button onclick="gerarRelatorioCobranca()" style="background:var(--accent2);border:none;color:#fff;border-radius:6px;padding:4px 12px;cursor:pointer;font-size:12px;font-weight:600;">📋 Relatório de Cobrança</button>
         <button onclick="enviarCobrancaAtiva()" style="background:rgba(255,60,60,0.8);border:none;color:#fff;border-radius:6px;padding:4px 12px;cursor:pointer;font-size:12px;font-weight:600;">📣 Enviar Cobrança</button>
         <button onclick="document.getElementById('metas-panel').style.display='none'" style="background:rgba(255,255,255,0.15);border:none;color:#fff;border-radius:6px;padding:3px 10px;cursor:pointer;font-size:12px;">✕</button>
@@ -4095,18 +4096,23 @@ function _calcularSemanaAtual() {
   inicioSemana.setHours(0,0,0,0);
   const fimSemana = new Date(inicioSemana); fimSemana.setDate(inicioSemana.getDate() + 6);
 
-  // pasta → titular (dono da carteira, considerando transferências)
-  const _titularMap = {};
+  // ── Mapas de contexto ──────────────────────────────────────────────
   const allPastas = Object.values(KANBAN_DATA.responsaveis).flatMap(r =>
     Object.values(r.sections).flat().map(c => ({ ...c, _short: r.short }))
   );
+
+  // pasta → titular atual (considera responsavelAtual se houve transferência)
+  const _titularMap = {};
+  // pasta → executor atual (responsavelAtual ou delegadoPara se houver)
+  const _executorAtualMap = {};
   for(const c of allPastas) {
     const cs = getClientState(c.pasta);
-    _titularMap[String(c.pasta)] = cs.responsavelAtual || c._short;
+    const titular = cs.responsavelAtual || c._short;
+    _titularMap[String(c.pasta)] = titular;
+    // Executor atual: se tem delegação ativa, é o delegatário; senão é o titular atual
+    _executorAtualMap[String(c.pasta)] = cs.delegadoPara || titular;
   }
 
-  // Mapa titular → dupla (para agregar contatos/ajuizamentos na dupla)
-  // Dupla = { titShort, cx, est }
   const _DUPLAS_MAP = [
     { titShort:'Bruno',    cx:'Alice',     est:'Julia'   },
     { titShort:'Douglas',  cx:'Franciele', est:'Julia'   },
@@ -4115,55 +4121,76 @@ function _calcularSemanaAtual() {
     { titShort:'Janaina',  cx:'Larissa',   est:'Matheus' },
     { titShort:'Vitoria',  cx:'Bibiana',   est:'Matheus' },
   ];
-  // shortName → dupla key (e.g. 'Bruno' → 'Bruno')
-  const _pessoaDupla = {};
+
+  // shortName → { titShort, isCX, isEst }
+  const _membroDupla = {};
   for(const d of _DUPLAS_MAP) {
-    _pessoaDupla[d.titShort] = d.titShort;
-    _pessoaDupla[d.cx]       = d.titShort; // CX mapeia para o titular
-    _pessoaDupla[d.est]      = d.est;       // estagiário tem chave própria (atende 3 duplas)
+    _membroDupla[d.titShort] = { titShort: d.titShort, isCX: false, isEst: false };
+    _membroDupla[d.cx]       = { titShort: d.titShort, isCX: true,  isEst: false };
+    _membroDupla[d.est]      = { titShort: d.est,      isCX: false, isEst: true  };
   }
 
-  const _initPessoa = () => ({ contatos:0, ajuizamentos:0, visualizacoes:0, analises:0, delegadas:0 });
-  const _initDupla  = () => ({ contatos:0, ajuizamentos:0,
-    detalhe: {} // shortName → { contatos, ajuizamentos }
-  });
-  const realizado = {}; // por pessoa (shortName)
-  const duplaMap  = {}; // por titShort da dupla
-  const ensure    = k => { if(!realizado[k]) realizado[k] = _initPessoa(); };
-  const ensureD   = k => { if(!duplaMap[k])  duplaMap[k]  = _initDupla();  };
+  const _initP = () => ({ contatos:0, ajuizamentos:0, visualizacoes:0, analises:0, delegadas:0 });
+  const _initD = () => ({ contatos:0, ajuizamentos:0, detalhe:{} });
+  const realizado = {};
+  const duplaMap  = {};
+  const ensure  = k => { if(k && !realizado[k]) realizado[k] = _initP(); };
+  const ensureD = k => { if(k && !duplaMap[k])  duplaMap[k]  = _initD(); };
 
   for(const item of log) {
     if(!item.ts || !item.resp) continue;
     const d = new Date(item.ts);
     if(d < inicioSemana || d > fimSemana) continue;
 
-    const executor = item.resp;
-    const titular  = item.titular || (item.pasta ? (_titularMap[String(item.pasta)] || executor) : executor);
+    const pastaId = item.pasta ? String(item.pasta) : null;
+
+    // ── Resolve executor real ────────────────────────────────────────
+    // item.resp = quem registrou (pode ser titular antigo em logs pré-correção)
+    // item.titular = dono da carteira (só existe em logs pós-correção)
+    // Para logs antigos sem item.titular: usamos _executorAtualMap para inferir
+    // quem está de fato executando aquela pasta hoje
+    let executor = item.resp;
+    let titular  = item.titular || (pastaId ? (_titularMap[pastaId] || executor) : executor);
+
+    // Correção para logs antigos: se item.resp === titular da pasta
+    // mas a pasta tem delegação ativa, o executor real provavelmente é o CX
+    if(!item.titular && pastaId) {
+      const executorAtual = _executorAtualMap[pastaId];
+      // Se o resp do log é o titular E há um executor diferente (CX ou estagiário)
+      // E esse executor pertence à mesma dupla → atribui ao executor atual
+      if(executorAtual && executorAtual !== executor) {
+        const membroResp = _membroDupla[executor];
+        const membroExec = _membroDupla[executorAtual];
+        // Só corrige se ambos são da mesma dupla (evita atribuição errada)
+        if(membroResp && membroExec && membroResp.titShort === (membroExec.isCX ? membroExec.titShort : membroResp.titShort)) {
+          executor = executorAtual;
+        }
+      }
+    }
+
     ensure(executor);
     ensure(titular);
 
     if(item.type === 'ajuizado') {
-      // Crédito de ajuizamento → TITULAR da carteira (individualmente)
+      // Crédito ao TITULAR (meta de produção da carteira)
       realizado[titular].ajuizamentos++;
-      // E também para a dupla do titular
-      const duplaKey = _pessoaDupla[titular] || titular;
-      ensureD(duplaKey);
-      duplaMap[duplaKey].ajuizamentos++;
-      if(!duplaMap[duplaKey].detalhe[titular]) duplaMap[duplaKey].detalhe[titular] = {contatos:0,ajuizamentos:0};
-      duplaMap[duplaKey].detalhe[titular].ajuizamentos++;
+      const dk = _membroDupla[titular]?.titShort || titular;
+      ensureD(dk);
+      duplaMap[dk].ajuizamentos++;
+      if(!duplaMap[dk].detalhe[executor]) duplaMap[dk].detalhe[executor] = {contatos:0, ajuizamentos:0};
+      duplaMap[dk].detalhe[executor].ajuizamentos++;
 
     } else if(item.type === 'contato') {
-      // Crédito de contato → quem executou (individualmente)
+      // Crédito ao EXECUTOR (meta de atividade individual)
       realizado[executor].contatos++;
-      // E também para a dupla — contato de CX, titular OU estagiário conta para a dupla
-      // Para estagiário: conta para TODAS as duplas que ele atende (Julia → Bruno, Douglas, Stalin)
-      const duplaEntries = _DUPLAS_MAP.filter(dd =>
+      // Conta para todas as duplas onde executor atua
+      const duplas = _DUPLAS_MAP.filter(dd =>
         dd.titShort === executor || dd.cx === executor || dd.est === executor
       );
-      for(const dd of duplaEntries) {
+      for(const dd of duplas) {
         ensureD(dd.titShort);
         duplaMap[dd.titShort].contatos++;
-        if(!duplaMap[dd.titShort].detalhe[executor]) duplaMap[dd.titShort].detalhe[executor] = {contatos:0,ajuizamentos:0};
+        if(!duplaMap[dd.titShort].detalhe[executor]) duplaMap[dd.titShort].detalhe[executor] = {contatos:0, ajuizamentos:0};
         duplaMap[dd.titShort].detalhe[executor].contatos++;
       }
 
@@ -4174,7 +4201,7 @@ function _calcularSemanaAtual() {
     }
   }
 
-  // Análises via Firestore
+  // Análises via Firestore (mais confiável para estagiários)
   for(const [internName, pastas] of Object.entries(KANBAN_DATA.estagiarios || {})) {
     const concluidas = pastas.filter(c => getClientState(c.pasta).internStatus === 'concluido').length;
     ensure(internName);
@@ -4189,6 +4216,78 @@ function _calcularSemanaAtual() {
 
   return { realizado, duplaMap, inicioSemana, fimSemana };
 }
+
+// ==================== TRANSFERÊNCIA EM MASSA ====================
+function transferirResponsabilidadeEmMassa() {
+  // Encontra todas as pastas com delegação ativa (delegadoPara != null)
+  const allPastas = Object.values(KANBAN_DATA.responsaveis).flatMap(r =>
+    Object.values(r.sections).flat().map(c => ({ ...c, _short: r.short }))
+  );
+
+  const _DUPLAS_MAP = [
+    { titShort:'Bruno',    cx:'Alice'     },
+    { titShort:'Douglas',  cx:'Franciele' },
+    { titShort:'Stalin',   cx:'Camila'    },
+    { titShort:'Fernando', cx:'Adriane'   },
+    { titShort:'Janaina',  cx:'Larissa'   },
+    { titShort:'Vitoria',  cx:'Bibiana'   },
+  ];
+  const cxDeTitular = Object.fromEntries(_DUPLAS_MAP.map(d=>[d.titShort, d.cx]));
+
+  // Coleta pastas delegadas ao CX da dupla (não ao estagiário)
+  const paraTransferir = [];
+  for(const c of allPastas) {
+    const cs = getClientState(c.pasta);
+    if(!cs.delegadoPara) continue;
+    if(['Julia','Matheus'].includes(cs.delegadoPara)) continue; // estagiário: não transfere
+    const cx = cxDeTitular[c._short];
+    if(cs.delegadoPara !== cx) continue; // delegado para outro, não o CX da dupla
+    if(cs.responsavelAtual && cs.responsavelAtual !== c._short) continue; // já transferido
+    paraTransferir.push({ pasta: c.pasta, nome: c.nome, titular: c._short, novResp: cx });
+  }
+
+  if(paraTransferir.length === 0) {
+    notify('Nenhuma pasta com delegação ativa ao CX encontrada.');
+    return;
+  }
+
+  // Agrupa por CX para mostrar resumo
+  const porCX = {};
+  for(const p of paraTransferir) {
+    if(!porCX[p.novResp]) porCX[p.novResp] = { titular: p.titular, pastas: [] };
+    porCX[p.novResp].pastas.push(p.pasta);
+  }
+
+  const resumo = Object.entries(porCX)
+    .map(([cx, d]) => `• ${cx} (dupla de ${d.titular}): ${d.pastas.length} pasta${d.pastas.length!==1?'s':''}`)
+    .join('\n');
+
+  const confirma = confirm(
+    `Transferir responsabilidade de ${paraTransferir.length} pasta${paraTransferir.length!==1?'s':''} para o CX executante?\n\n${resumo}\n\nIsso altera o titular nas metas. A pasta continua na carteira original no Kanban.`
+  );
+  if(!confirma) return;
+
+  let transferidas = 0;
+  const _exec = _currentUser?.shortName || 'Gestor';
+  for(const p of paraTransferir) {
+    const cs = getClientState(p.pasta);
+    cs.responsavelAtual = p.novResp;
+    cs.responsavelOriginal = cs.responsavelOriginal || p.titular;
+    cs.responsabilidadeTransferidaEm = new Date().toISOString();
+    setClientState(p.pasta, cs);
+    addActivityLog({
+      type: 'contato', pasta: p.pasta, nome: p.nome,
+      resp: _exec, titular: p.novResp,
+      fase: `🔁 Responsabilidade: ${p.titular} → ${p.novResp}`
+    });
+    transferidas++;
+  }
+
+  notify(`🔁 ${transferidas} pasta${transferidas!==1?'s':''} transferidas — metas atualizadas`);
+  renderMetasPanel();
+  renderDashboard();
+}
+// ==================== FIM TRANSFERÊNCIA EM MASSA ====================
 
 function openMetasPanel() {
   if(_currentUser?.role !== 'gestor') { notify('⛔ Acesso restrito ao gestor.'); return; }
