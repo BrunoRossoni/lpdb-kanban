@@ -4347,27 +4347,17 @@ function renderMetasPanel() {
   }
 
   // Ajuizamentos do estagiário nas pastas de uma dupla específica na semana
-  function _ajuizEstNaDupla(estName, titShort) {
+  // ── Funções por pasta: a ÚNICA forma confiável de saber o que cada pessoa fez ──
+  // Filtra o log pela pasta (âncora objetiva), não pelo nome inferido da dupla.
+  // Funciona para qualquer pessoa — titular, CX ou estagiário.
+  function _porPasta(shortName, type, titShort) {
     const rdataE = Object.entries(KANBAN_DATA.responsaveis).find(([,v]) => v.short === titShort);
     if(!rdataE) return 0;
     const pastas = new Set(Object.values(rdataE[1].sections).flat().map(c => String(c.pasta)));
     const hoje = new Date(), d0 = hoje.getDay() === 0 ? 6 : hoje.getDay() - 1;
     const ini = new Date(hoje); ini.setDate(hoje.getDate() - d0); ini.setHours(0,0,0,0);
     return (_logCache.entries || []).filter(i =>
-      i.resp === estName && i.type === 'ajuizado' && i.ts && new Date(i.ts) >= ini
-      && pastas.has(String(i.pasta || ''))
-    ).length;
-  }
-
-  // Contatos do estagiário nas pastas de uma dupla específica na semana
-  function _contatosEstNaDupla(estName, titShort) {
-    const rdataE = Object.entries(KANBAN_DATA.responsaveis).find(([,v]) => v.short === titShort);
-    if(!rdataE) return 0;
-    const pastas = new Set(Object.values(rdataE[1].sections).flat().map(c => String(c.pasta)));
-    const hoje = new Date(), d0 = hoje.getDay() === 0 ? 6 : hoje.getDay() - 1;
-    const ini = new Date(hoje); ini.setDate(hoje.getDate() - d0); ini.setHours(0,0,0,0);
-    return (_logCache.entries || []).filter(i =>
-      i.resp === estName && i.type === 'contato' && i.ts && new Date(i.ts) >= ini
+      i.resp === shortName && i.type === type && i.ts && new Date(i.ts) >= ini
       && pastas.has(String(i.pasta || ''))
     ).length;
   }
@@ -4376,10 +4366,7 @@ function renderMetasPanel() {
   let html = '';
 
   for(const d of DUPLAS) {
-    const rTit = realizado[d.titShort] || {};
-    const rCX  = realizado[d.cx]       || {};
-    const rEst = realizado[d.est]      || {};
-    const rDup = duplaMap[d.titShort]  || { contatos:0, ajuizamentos:0, detalhe:{} };
+    const rDup = duplaMap[d.titShort] || { contatos:0, ajuizamentos:0 };
 
     const rdataE = Object.entries(KANBAN_DATA.responsaveis).find(([,v]) => v.short === d.titShort);
     const rdata  = rdataE?.[1];
@@ -4388,16 +4375,22 @@ function renderMetasPanel() {
     const delegCX = Object.values(KANBAN_DATA.responsaveis).flatMap(r => Object.values(r.sections).flat())
       .filter(c => getClientState(c.pasta).delegadoPara === d.cx).length;
 
-    const det    = rDup.detalhe || {};
-    const dTit   = det[d.titShort] || { contatos:0, ajuizamentos:0 };
-    const dCX    = det[d.cx]       || { contatos:0, ajuizamentos:0 };
+    // Titular e estagiário: filtrados pelas pastas desta carteira (âncora objetiva)
+    const cTit  = _porPasta(d.titShort, 'contato',  d.titShort);
+    const ajTit = _porPasta(d.titShort, 'ajuizado', d.titShort);
+    const cEst  = _porPasta(d.est,      'contato',  d.titShort);
+    const ajEst = _porPasta(d.est,      'ajuizado', d.titShort);
 
-    // Estagiário: contatos e ajuizamentos nas pastas desta dupla especificamente
-    const cEstAqui  = _contatosEstNaDupla(d.est, d.titShort);
-    const ajEstAqui = _ajuizEstNaDupla(d.est, d.titShort);
+    // CX: tudo que fez na semana (qualquer pasta) — conforme preferência do gestor
+    const rCX   = realizado[d.cx]       || {};
+    const rTit  = realizado[d.titShort] || {};
+    const rEst  = realizado[d.est]      || {};
+    const cCX   = rCX.contatos   || 0;
+    const ajCX  = rCX.ajuizamentos || 0;
 
-    const cTotal  = rDup.contatos;
-    const ajTotal = rDup.ajuizamentos;
+    // Total da dupla: soma real de cada membro (não o duplaMap que usa nome como âncora)
+    const cTotal  = cTit + cCX + cEst;
+    const ajTotal = ajTit + ajCX + ajEst;
 
     const semDup = (() => {
       const pairs = [[cTotal, mDupla.contatos],[ajTotal, mDupla.ajuizamentos]].filter(([,m]) => m > 0);
@@ -4451,8 +4444,8 @@ function renderMetasPanel() {
           <div style="font-weight:700;font-size:13px;">${d.titShort}</div>
           <div style="font-size:10px;color:var(--text3);">Titular · ${ativas} pastas</div>
         </td>
-        <td style="padding:10px;text-align:center;">${_contrib(dTit.contatos)}</td>
-        <td style="padding:10px;text-align:center;">${_contrib(dTit.ajuizamentos || rTit.ajuizamentos || 0)}</td>
+        <td style="padding:10px;text-align:center;">${_contrib(cTit)}</td>
+        <td style="padding:10px;text-align:center;">${_contrib(ajTit)}</td>
         <td style="padding:10px;text-align:center;">${_num(rTit.visualizacoes || 0, mAdv.visualizacoes)}</td>
         <td style="padding:10px;text-align:center;">${_semTag([[rTit.visualizacoes||0, mAdv.visualizacoes]])}</td>
       </tr>
@@ -4463,20 +4456,20 @@ function renderMetasPanel() {
           <div style="font-weight:600;font-size:13px;">${d.cx}</div>
           <div style="font-size:10px;color:var(--text3);">CX · ${delegCX} delegadas</div>
         </td>
-        <td style="padding:10px;text-align:center;">${_contrib(dCX.contatos)}</td>
-        <td style="padding:10px;text-align:center;color:var(--text3);">—</td>
+        <td style="padding:10px;text-align:center;">${_contrib(cCX)}</td>
+        <td style="padding:10px;text-align:center;">${_contrib(ajCX)}</td>
         <td style="padding:10px;text-align:center;">${_num(rCX.visualizacoes || 0, mCX.visualizacoes)}</td>
         <td style="padding:10px;text-align:center;">${_semTag([[rCX.visualizacoes||0, mCX.visualizacoes]])}</td>
       </tr>
 
-      <!-- Estagiário — contatos e ajuizamentos nas pastas desta dupla -->
+      <!-- Estagiário — filtrado pelas pastas desta carteira -->
       <tr style="border-bottom:1px solid var(--border);background:#EEEDFE;">
         <td style="padding:10px 14px;">
           <div style="font-weight:700;font-size:13px;color:#3C3489;">${d.est}</div>
           <div style="font-size:10px;color:#534AB7;">Estagiário nesta dupla</div>
         </td>
-        <td style="padding:10px;text-align:center;">${_contrib(cEstAqui)}</td>
-        <td style="padding:10px;text-align:center;">${_contrib(ajEstAqui)}</td>
+        <td style="padding:10px;text-align:center;">${_contrib(cEst)}</td>
+        <td style="padding:10px;text-align:center;">${_contrib(ajEst)}</td>
         <td style="padding:10px;text-align:center;">${_num(rEst.visualizacoes || 0, mEst.visualizacoes)}</td>
         <td style="padding:10px;text-align:center;">${_semTag([[rEst.visualizacoes||0, mEst.visualizacoes]])}</td>
       </tr>
