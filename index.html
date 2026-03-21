@@ -1240,6 +1240,23 @@ body { font-family: "DM Sans", sans-serif; background: var(--bg); color: var(--t
 </div><!-- /main -->
 
 <!-- MODAL SENHA PRESENÇA -->
+<!-- PAINEL DE DESEMPENHO HISTÓRICO -->
+<div class="modal-overlay" id="desempenho-modal" style="display:none;align-items:flex-start;justify-content:center;padding-top:40px;overflow-y:auto;">
+  <div class="modal" style="max-width:860px;width:100%;margin-bottom:40px;">
+    <div class="modal-header" style="background:var(--accent);">
+      <div>
+        <div class="modal-title" style="color:#fff;">📈 Desempenho Histórico</div>
+        <div class="modal-subtitle-h" style="color:rgba(255,255,255,0.7);">Acumulado desde o início do projeto</div>
+      </div>
+      <button class="modal-close" onclick="document.getElementById('desempenho-modal').style.display='none'">✕</button>
+    </div>
+    <div class="modal-body" style="padding:20px 24px;">
+      <div id="desempenho-loading" style="text-align:center;padding:40px;color:var(--text3);font-size:13px;">Carregando dados...</div>
+      <div id="desempenho-body" style="display:none;"></div>
+    </div>
+  </div>
+</div>
+
 <div class="modal-overlay" id="gestor-auth-modal" style="display:none;align-items:center;justify-content:center;">
   <div class="modal" style="max-width:400px;">
     <div class="modal-header" style="background:var(--accent);">
@@ -1876,16 +1893,37 @@ function getActivityLog() {
 }
 function addActivityLog(entry) {
   const log = getActivityLog();
-  log.unshift({...entry, ts: new Date().toISOString()});
+  const fullEntry = {...entry, ts: new Date().toISOString()};
+  log.unshift(fullEntry);
   if(log.length > 200) log.splice(200);
   _logCache.entries = log;
   localStorage.setItem('lpdb_actlog', JSON.stringify(log));
   if(_firestoreReady) {
     db.collection('sistema').doc('actlog').set({entries: log})
       .catch(e => console.warn('[LPDB] Erro ao salvar log:', e));
+    _incrementarEstatistica(fullEntry);
   }
   renderActivityLog();
   renderDashboard();
+}
+
+function _incrementarEstatistica(entry) {
+  if(!entry.resp || !_firestoreReady) return;
+  const resp = entry.resp;
+  const inc  = firebase.firestore.FieldValue.increment(1);
+  const ref  = db.collection('sistema').doc('estatisticas_' + resp);
+  const campo = {
+    sessao:         'logins',
+    visualizacao:   'visualizacoes',
+    contato:        'contatos',
+    ajuizado:       'ajuizamentos',
+    incomunicavel:  'incomunicaveis',
+    encerrado:      'encerrados',
+    analise_intern: 'analises_documentos',
+  }[entry.type];
+  if(!campo) return;
+  ref.set({ [campo]: inc, ultimaAtualizacao: new Date().toISOString() }, { merge: true })
+    .catch(e => console.warn('[LPDB] Erro ao incrementar estatistica:', e));
 }
 function clearActivityLog() {
   localStorage.removeItem('lpdb_actlog');
@@ -4014,6 +4052,7 @@ function openGestorMenu(e) {
       <button onclick="openRelatorio();document.getElementById('gestor-menu')?.remove();" style="width:100%;text-align:left;padding:10px 16px;background:none;border:none;cursor:pointer;font-size:13px;color:var(--text);display:flex;align-items:center;gap:10px;"><span>📊</span> Gerar Relatório</button>
       <button onclick="openPresencePanel();document.getElementById('gestor-menu')?.remove();" style="width:100%;text-align:left;padding:10px 16px;background:none;border:none;cursor:pointer;font-size:13px;color:var(--text);display:flex;align-items:center;gap:10px;"><span>👁️</span> Painel de Presença</button>
       <button onclick="openMetasPanel();document.getElementById('gestor-menu')?.remove();" style="width:100%;text-align:left;padding:10px 16px;background:none;border:none;cursor:pointer;font-size:13px;color:var(--text);display:flex;align-items:center;gap:10px;"><span>🎯</span> Metas e Cobrança</button>
+      <button onclick="openDesempenho();document.getElementById('gestor-menu')?.remove();" style="width:100%;text-align:left;padding:10px 16px;background:none;border:none;cursor:pointer;font-size:13px;color:var(--text);display:flex;align-items:center;gap:10px;"><span>📈</span> Desempenho Histórico</button>
     </div>`;
   document.body.appendChild(menu);
   setTimeout(()=>{ document.addEventListener('click', ()=>{ menu?.remove(); _gestorMenuOpen=false; }, { once:true }); }, 50);
@@ -4375,18 +4414,17 @@ function renderMetasPanel() {
     const delegCX = Object.values(KANBAN_DATA.responsaveis).flatMap(r => Object.values(r.sections).flat())
       .filter(c => getClientState(c.pasta).delegadoPara === d.cx).length;
 
-    // Titular e estagiário: filtrados pelas pastas desta carteira (âncora objetiva)
+    // Todos os membros filtrados pelas pastas desta carteira — âncora objetiva única
     const cTit  = _porPasta(d.titShort, 'contato',  d.titShort);
     const ajTit = _porPasta(d.titShort, 'ajuizado', d.titShort);
+    const cCX   = _porPasta(d.cx,       'contato',  d.titShort);
+    const ajCX  = _porPasta(d.cx,       'ajuizado', d.titShort);
     const cEst  = _porPasta(d.est,      'contato',  d.titShort);
     const ajEst = _porPasta(d.est,      'ajuizado', d.titShort);
 
-    // CX: tudo que fez na semana (qualquer pasta) — conforme preferência do gestor
-    const rCX   = realizado[d.cx]       || {};
-    const rTit  = realizado[d.titShort] || {};
-    const rEst  = realizado[d.est]      || {};
-    const cCX   = rCX.contatos   || 0;
-    const ajCX  = rCX.ajuizamentos || 0;
+    const rCX  = realizado[d.cx]       || {};
+    const rTit = realizado[d.titShort] || {};
+    const rEst = realizado[d.est]      || {};
 
     // Total da dupla: soma real de cada membro (não o duplaMap que usa nome como âncora)
     const cTotal  = cTit + cCX + cEst;
@@ -4625,6 +4663,217 @@ function gerarRelatorioCobranca() {
 
 // ==================== RELATÓRIO GESTOR ====================
 const REL_SENHA_HASH = 'lpdb2026gestor'; // Senha em texto — troque aqui para alterar
+
+
+// ==================== DESEMPENHO HISTÓRICO ====================
+function openDesempenho() {
+  if(_currentUser?.role !== 'gestor') { notify('⛔ Acesso restrito ao gestor.'); return; }
+  _pedirSenhaGestor('📈 Desempenho Histórico', 'Confirme sua senha para acessar os dados históricos.', () => {
+    document.getElementById('desempenho-modal').style.display = 'flex';
+    document.getElementById('desempenho-loading').style.display = 'block';
+    document.getElementById('desempenho-body').style.display = 'none';
+    _carregarDesempenho();
+  });
+}
+
+async function _carregarDesempenho() {
+  const PESSOAS = [
+    { short:'Bruno',     display:'Bruno Peres Rossoni',          tipo:'adv', cx:'Alice'     },
+    { short:'Douglas',   display:'Douglas Leandro da Silva',     tipo:'adv', cx:'Franciele' },
+    { short:'Stalin',    display:'Stalin de Lima Lauser',        tipo:'adv', cx:'Camila'    },
+    { short:'Fernando',  display:'Fernando de Gonzalez e Silva', tipo:'adv', cx:'Adriane'   },
+    { short:'Janaina',   display:'Janaina Minetto',              tipo:'adv', cx:'Larissa'   },
+    { short:'Vitoria',   display:'Vitoria Dei Ricardi Weber',    tipo:'adv', cx:'Bibiana'   },
+    { short:'Alice',     display:'Alice Ribeiro da Silva',       tipo:'cx',  titular:'Bruno'     },
+    { short:'Franciele', display:'Franciele Vitória Flach',      tipo:'cx',  titular:'Douglas'   },
+    { short:'Camila',    display:'Camila Oliveira Carregosa',    tipo:'cx',  titular:'Stalin'    },
+    { short:'Adriane',   display:'Adriane Viegas Martinez',      tipo:'cx',  titular:'Fernando'  },
+    { short:'Larissa',   display:'Larissa Bassan Suello Gonda',  tipo:'cx',  titular:'Janaina'   },
+    { short:'Bibiana',   display:'Bibiana das Virgens',          tipo:'cx',  titular:'Vitoria'   },
+    { short:'Julia',     display:'Julia',                        tipo:'est'  },
+    { short:'Matheus',   display:'Matheus',                      tipo:'est'  },
+  ];
+
+  // ── Reconstrução histórica das pastas ────────────────────────────
+  // Para cada pasta, determina QUEM executou cada status com base na regra:
+  //   executor = cs.delegadoPara (se existir) ou cs.responsavelAtual ou titular original
+  // Complementado pelo log disponível (até 200 entradas) para maior precisão.
+
+  // Mapa pasta → executor real pelo log (se disponível)
+  const logExecMap = {}; // pasta+tipo → shortName
+  for(const item of (_logCache.entries||[])) {
+    if(!item.pasta || !item.resp || !item.type) continue;
+    const key = String(item.pasta) + '|' + item.type;
+    if(!logExecMap[key]) logExecMap[key] = item.resp; // pega o mais recente (log está ordenado desc)
+  }
+
+  // Contadores por pessoa
+  const counts = {};
+  const init = () => ({ ajuizamentos:0, incomunicaveis:0, encerrados:0, contatos:0, visualizacoes:0, logins:0, total:0 });
+  PESSOAS.forEach(p => { counts[p.short] = init(); });
+
+  // Varre todas as pastas
+  for(const [,rdata] of Object.entries(KANBAN_DATA.responsaveis)) {
+    const titOriginal = rdata.short;
+    for(const pastas of Object.values(rdata.sections)) {
+      for(const pasta of pastas) {
+        const cs = getClientState(pasta.pasta);
+        const pastaId = String(pasta.pasta);
+        const st = cs.status || '';
+
+        // Executor: delegadoPara > responsavelAtual > titular original
+        const executorAtual = cs.delegadoPara || cs.responsavelAtual || titOriginal;
+
+        // Para status finais, tenta log primeiro (mais preciso), senão usa executor atual
+        const execAjuiz  = logExecMap[pastaId+'|ajuizado']       || (st==='ajuizado'      ? executorAtual : null);
+        const execIncom  = logExecMap[pastaId+'|incomunicavel']   || (st==='incomunicavel' ? executorAtual : null);
+        const execEncer  = logExecMap[pastaId+'|encerrado']       || (st==='encerrado'     ? executorAtual : null);
+
+        if(execAjuiz  && counts[execAjuiz])  counts[execAjuiz].ajuizamentos++;
+        if(execIncom  && counts[execIncom])  counts[execIncom].incomunicaveis++;
+        if(execEncer  && counts[execEncer])  counts[execEncer].encerrados++;
+
+        // Total de pastas por titular original
+        if(counts[titOriginal]) counts[titOriginal].total++;
+      }
+    }
+  }
+
+  // Complementa com contadores acumulados do Firestore (logins, visualizações, contatos)
+  const snapshots = await Promise.all(
+    PESSOAS.map(p => db.collection('sistema').doc('estatisticas_' + p.short).get().catch(()=>null))
+  );
+  snapshots.forEach((snap, i) => {
+    const p = PESSOAS[i];
+    const data = snap?.exists ? snap.data() : {};
+    counts[p.short].logins       = data.logins       || 0;
+    counts[p.short].visualizacoes= data.visualizacoes|| 0;
+    counts[p.short].contatos     = data.contatos     || 0;
+  });
+
+  // ── Renderiza ─────────────────────────────────────────────────────
+  const COLS = [
+    { key:'ajuizamentos',  label:'Ajuizamentos',   icon:'⚖️'  },
+    { key:'incomunicaveis',label:'Incomunicáveis',  icon:'🔕'  },
+    { key:'encerrados',    label:'Encerrados',      icon:'✅'  },
+    { key:'contatos',      label:'Contatos',        icon:'📱'  },
+    { key:'visualizacoes', label:'Pastas abertas',  icon:'👁️'  },
+    { key:'logins',        label:'Logins',          icon:'🔑'  },
+  ];
+  const tipoLabel = { adv:'Advogado', cx:'CX', est:'Estagiário' };
+  const tipoOrder = { adv:0, cx:1, est:2 };
+  const sorted = [...PESSOAS].sort((a,b)=>tipoOrder[a.tipo]-tipoOrder[b.tipo]);
+
+  const totais = Object.fromEntries(COLS.map(col=>[col.key,0]));
+  let rows = '';
+
+  for(const p of sorted) {
+    const v = counts[p.short];
+    COLS.forEach(col => totais[col.key] += v[col.key]);
+    const badgeBg = p.tipo==='adv' ? 'var(--accent)' : p.tipo==='cx' ? 'var(--accent2)' : '#534AB7';
+    rows += `<tr style="border-bottom:1px solid var(--border);">
+      <td style="padding:10px 14px;min-width:130px;">
+        <div style="font-weight:600;font-size:13px;">${p.display.split(' ')[0]}</div>
+        <div style="font-size:10px;margin-top:2px;">
+          <span style="background:${badgeBg};color:#fff;padding:1px 7px;border-radius:8px;font-size:9px;">${tipoLabel[p.tipo]}</span>
+        </div>
+      </td>
+      ${COLS.map(col => {
+        const val = v[col.key];
+        const col_style = (col.key==='ajuizamentos'||col.key==='incomunicaveis'||col.key==='encerrados')
+          ? 'color:var(--text);' : 'color:var(--text3);';
+        return `<td style="padding:10px 12px;text-align:center;">
+          <span style="font-family:'DM Serif Display';font-size:18px;${col_style}">${val.toLocaleString('pt-BR')}</span>
+        </td>`;
+      }).join('')}
+    </tr>`;
+  }
+
+  rows += `<tr style="background:var(--surface2);border-top:2px solid var(--border);">
+    <td style="padding:10px 14px;font-size:12px;font-weight:700;color:var(--text);">TOTAL GERAL</td>
+    ${COLS.map(col=>`<td style="padding:10px 12px;text-align:center;">
+      <span style="font-family:'DM Serif Display';font-size:18px;color:var(--accent);">${totais[col.key].toLocaleString('pt-BR')}</span>
+    </td>`).join('')}
+  </tr>`;
+
+  const html = `
+  <div style="display:flex;justify-content:flex-end;margin-bottom:10px;">
+    <button onclick="_recalcularEstatisticas()" style="background:var(--accent);color:#fff;border:none;border-radius:6px;padding:6px 14px;cursor:pointer;font-size:12px;font-weight:600;">🔄 Recalcular tudo do zero</button>
+  </div>
+  <div style="overflow-x:auto;">
+  <table style="width:100%;border-collapse:collapse;font-size:12px;min-width:700px;">
+    <thead>
+      <tr style="background:var(--accent);">
+        <th style="padding:10px 14px;text-align:left;color:#fff;font-weight:600;font-size:12px;">Colaborador</th>
+        ${COLS.map(col=>`<th style="padding:10px 12px;text-align:center;color:#fff;font-weight:600;font-size:11px;">
+          <div style="font-size:14px;margin-bottom:2px;">${col.icon}</div>${col.label}
+        </th>`).join('')}
+      </tr>
+    </thead>
+    <tbody>${rows}</tbody>
+  </table>
+  </div>
+  <div style="font-size:11px;color:var(--text3);margin-top:10px;padding:8px 12px;background:var(--surface2);border-radius:6px;line-height:1.6;">
+    ⚖️ <strong style="font-weight:500;">Ajuizamentos, incomunicáveis e encerrados</strong>: calculados diretamente das pastas — executor determinado pela delegação ativa ou log de atividades.<br>
+    📱 <strong style="font-weight:500;">Contatos, visualizações e logins</strong>: acumulados a partir do início do uso do sistema (não retroativos).<br>
+    Use <em>Recalcular tudo do zero</em> para reprocessar os dados das pastas a qualquer momento.
+  </div>`;
+
+  document.getElementById('desempenho-loading').style.display = 'none';
+  document.getElementById('desempenho-body').style.display = 'block';
+  document.getElementById('desempenho-body').innerHTML = html;
+}
+
+// Recalcula e grava todos os contadores de pastas no Firestore
+async function _recalcularEstatisticas() {
+  if(!confirm('Recalcular todos os contadores de pastas (ajuizamentos, incomunicáveis, encerrados) do zero?\n\nIsso substitui os valores atuais.')) return;
+  notify('🔄 Recalculando...');
+
+  const logExecMap = {};
+  for(const item of (_logCache.entries||[])) {
+    if(!item.pasta || !item.resp || !item.type) continue;
+    const key = String(item.pasta) + '|' + item.type;
+    if(!logExecMap[key]) logExecMap[key] = item.resp;
+  }
+
+  // Acumula por pessoa
+  const acc = {};
+  const TODOS = ['Bruno','Douglas','Stalin','Fernando','Janaina','Vitoria',
+                 'Alice','Franciele','Camila','Adriane','Larissa','Bibiana','Julia','Matheus'];
+  TODOS.forEach(s => { acc[s] = { ajuizamentos:0, incomunicaveis:0, encerrados:0 }; });
+
+  for(const [,rdata] of Object.entries(KANBAN_DATA.responsaveis)) {
+    const titOriginal = rdata.short;
+    for(const pastas of Object.values(rdata.sections)) {
+      for(const pasta of pastas) {
+        const cs = getClientState(pasta.pasta);
+        const pastaId = String(pasta.pasta);
+        const st = cs.status || '';
+        const exec = cs.delegadoPara || cs.responsavelAtual || titOriginal;
+
+        const execAjuiz = logExecMap[pastaId+'|ajuizado']     || (st==='ajuizado'      ? exec : null);
+        const execIncom = logExecMap[pastaId+'|incomunicavel'] || (st==='incomunicavel' ? exec : null);
+        const execEncer = logExecMap[pastaId+'|encerrado']     || (st==='encerrado'     ? exec : null);
+
+        if(execAjuiz  && acc[execAjuiz])  acc[execAjuiz].ajuizamentos++;
+        if(execIncom  && acc[execIncom])  acc[execIncom].incomunicaveis++;
+        if(execEncer  && acc[execEncer])  acc[execEncer].encerrados++;
+      }
+    }
+  }
+
+  // Grava no Firestore com merge (preserva logins/contatos/visualizacoes)
+  const batch = db.batch();
+  for(const [short, data] of Object.entries(acc)) {
+    const ref = db.collection('sistema').doc('estatisticas_' + short);
+    batch.set(ref, { ...data, recalculadoEm: new Date().toISOString() }, { merge: true });
+  }
+  await batch.commit().catch(e => { notify('Erro ao salvar: ' + e.message); return; });
+
+  notify('✅ Estatísticas recalculadas com sucesso!');
+  _carregarDesempenho();
+}
+// ==================== FIM DESEMPENHO HISTÓRICO ====================
 
 function openRelatorio() {
   if(_currentUser?.role !== 'gestor') { notify('⛔ Acesso restrito ao gestor.'); return; }
