@@ -4125,6 +4125,53 @@ function _getMetas() {
 }
 
 // Calcula métricas da semana atual — individuais + por dupla
+// ==================== FONTE ÚNICA DE VERDADE ====================
+// Calcula estatísticas de cada pessoa varrendo _stateCache (Firestore) como fonte primária.
+// Usado por: metas semanais, desempenho histórico, recalcular estatísticas.
+// Retorna: { [shortName]: { ajuizamentos, incomunicaveis, encerrados, total } }
+function _calcularEstatisticasPastas() {
+  const result = {};
+  const ensure = k => { if(!result[k]) result[k] = { ajuizamentos:0, incomunicaveis:0, encerrados:0, total:0 }; };
+
+  // Log indexado por pasta+tipo para identificar executor com precisão máxima
+  const logIdx = {};
+  for(const item of (_logCache.entries||[])) {
+    if(!item.pasta || !item.resp) continue;
+    const k = String(item.pasta) + '|' + item.type;
+    if(!logIdx[k]) logIdx[k] = item.resp; // mais recente primeiro (log desc)
+  }
+
+  for(const [,rdata] of Object.entries(KANBAN_DATA.responsaveis)) {
+    const titOriginal = rdata.short;
+    for(const pastas of Object.values(rdata.sections)) {
+      for(const pasta of pastas) {
+        const cs = getClientState(pasta.pasta);
+        const pid = String(pasta.pasta);
+        const st  = cs.status || '';
+
+        // Executor: delegadoPara > responsavelAtual > titular original
+        // (mesma hierarquia em todo o sistema)
+        const exec = cs.delegadoPara || cs.responsavelAtual || titOriginal;
+
+        // Para cada status final, log tem precedência (captura quem estava logado na hora)
+        // Se log não tem o evento (>200 entradas), usa executor atual
+        const quemAjuizou  = logIdx[pid+'|ajuizado']       || (st==='ajuizado'       ? exec : null);
+        const quemIncom    = logIdx[pid+'|incomunicavel']   || (st==='incomunicavel'  ? exec : null);
+        const quemEncerrou = logIdx[pid+'|encerrado']       || (st==='encerrado'      ? exec : null);
+
+        ensure(titOriginal);
+        result[titOriginal].total++;
+
+        if(quemAjuizou)  { ensure(quemAjuizou);  result[quemAjuizou].ajuizamentos++;  }
+        if(quemIncom)    { ensure(quemIncom);     result[quemIncom].incomunicaveis++;  }
+        if(quemEncerrou) { ensure(quemEncerrou);  result[quemEncerrou].encerrados++;   }
+      }
+    }
+  }
+  return result;
+}
+// ==================== FIM FONTE ÚNICA ====================
+
 function _calcularSemanaAtual() {
   const log = _logCache.entries || [];
   const hoje = new Date();
@@ -4694,50 +4741,16 @@ async function _carregarDesempenho() {
     { short:'Matheus',   display:'Matheus',                      tipo:'est'  },
   ];
 
-  // ── Reconstrução histórica das pastas ────────────────────────────
-  // Para cada pasta, determina QUEM executou cada status com base na regra:
-  //   executor = cs.delegadoPara (se existir) ou cs.responsavelAtual ou titular original
-  // Complementado pelo log disponível (até 200 entradas) para maior precisão.
-
-  // Mapa pasta → executor real pelo log (se disponível)
-  const logExecMap = {}; // pasta+tipo → shortName
-  for(const item of (_logCache.entries||[])) {
-    if(!item.pasta || !item.resp || !item.type) continue;
-    const key = String(item.pasta) + '|' + item.type;
-    if(!logExecMap[key]) logExecMap[key] = item.resp; // pega o mais recente (log está ordenado desc)
-  }
+  // ── Fonte única: _calcularEstatisticasPastas() ──────────────────
+  // Mesma função usada pelas metas e pelo recalcular — garante que os números batem
+  const estatPastas = _calcularEstatisticasPastas();
 
   // Contadores por pessoa
   const counts = {};
   const init = () => ({ ajuizamentos:0, incomunicaveis:0, encerrados:0, contatos:0, visualizacoes:0, logins:0, total:0 });
-  PESSOAS.forEach(p => { counts[p.short] = init(); });
-
-  // Varre todas as pastas
-  for(const [,rdata] of Object.entries(KANBAN_DATA.responsaveis)) {
-    const titOriginal = rdata.short;
-    for(const pastas of Object.values(rdata.sections)) {
-      for(const pasta of pastas) {
-        const cs = getClientState(pasta.pasta);
-        const pastaId = String(pasta.pasta);
-        const st = cs.status || '';
-
-        // Executor: delegadoPara > responsavelAtual > titular original
-        const executorAtual = cs.delegadoPara || cs.responsavelAtual || titOriginal;
-
-        // Para status finais, tenta log primeiro (mais preciso), senão usa executor atual
-        const execAjuiz  = logExecMap[pastaId+'|ajuizado']       || (st==='ajuizado'      ? executorAtual : null);
-        const execIncom  = logExecMap[pastaId+'|incomunicavel']   || (st==='incomunicavel' ? executorAtual : null);
-        const execEncer  = logExecMap[pastaId+'|encerrado']       || (st==='encerrado'     ? executorAtual : null);
-
-        if(execAjuiz  && counts[execAjuiz])  counts[execAjuiz].ajuizamentos++;
-        if(execIncom  && counts[execIncom])  counts[execIncom].incomunicaveis++;
-        if(execEncer  && counts[execEncer])  counts[execEncer].encerrados++;
-
-        // Total de pastas por titular original
-        if(counts[titOriginal]) counts[titOriginal].total++;
-      }
-    }
-  }
+  PESSOAS.forEach(p => {
+    counts[p.short] = { ...init(), ...(estatPastas[p.short]||{}) };
+  });
 
   // Complementa com contadores acumulados do Firestore (logins, visualizações, contatos)
   const snapshots = await Promise.all(
@@ -4746,9 +4759,9 @@ async function _carregarDesempenho() {
   snapshots.forEach((snap, i) => {
     const p = PESSOAS[i];
     const data = snap?.exists ? snap.data() : {};
-    counts[p.short].logins       = data.logins       || 0;
-    counts[p.short].visualizacoes= data.visualizacoes|| 0;
-    counts[p.short].contatos     = data.contatos     || 0;
+    counts[p.short].logins        = data.logins        || 0;
+    counts[p.short].visualizacoes = data.visualizacoes || 0;
+    counts[p.short].contatos      = data.contatos      || 0;
   });
 
   // ── Renderiza ─────────────────────────────────────────────────────
@@ -4829,38 +4842,8 @@ async function _recalcularEstatisticas() {
   if(!confirm('Recalcular todos os contadores de pastas (ajuizamentos, incomunicáveis, encerrados) do zero?\n\nIsso substitui os valores atuais.')) return;
   notify('🔄 Recalculando...');
 
-  const logExecMap = {};
-  for(const item of (_logCache.entries||[])) {
-    if(!item.pasta || !item.resp || !item.type) continue;
-    const key = String(item.pasta) + '|' + item.type;
-    if(!logExecMap[key]) logExecMap[key] = item.resp;
-  }
-
-  // Acumula por pessoa
-  const acc = {};
-  const TODOS = ['Bruno','Douglas','Stalin','Fernando','Janaina','Vitoria',
-                 'Alice','Franciele','Camila','Adriane','Larissa','Bibiana','Julia','Matheus'];
-  TODOS.forEach(s => { acc[s] = { ajuizamentos:0, incomunicaveis:0, encerrados:0 }; });
-
-  for(const [,rdata] of Object.entries(KANBAN_DATA.responsaveis)) {
-    const titOriginal = rdata.short;
-    for(const pastas of Object.values(rdata.sections)) {
-      for(const pasta of pastas) {
-        const cs = getClientState(pasta.pasta);
-        const pastaId = String(pasta.pasta);
-        const st = cs.status || '';
-        const exec = cs.delegadoPara || cs.responsavelAtual || titOriginal;
-
-        const execAjuiz = logExecMap[pastaId+'|ajuizado']     || (st==='ajuizado'      ? exec : null);
-        const execIncom = logExecMap[pastaId+'|incomunicavel'] || (st==='incomunicavel' ? exec : null);
-        const execEncer = logExecMap[pastaId+'|encerrado']     || (st==='encerrado'     ? exec : null);
-
-        if(execAjuiz  && acc[execAjuiz])  acc[execAjuiz].ajuizamentos++;
-        if(execIncom  && acc[execIncom])  acc[execIncom].incomunicaveis++;
-        if(execEncer  && acc[execEncer])  acc[execEncer].encerrados++;
-      }
-    }
-  }
+  // Usa a mesma fonte única — garante consistência com metas e desempenho
+  const acc = _calcularEstatisticasPastas();
 
   // Grava no Firestore com merge (preserva logins/contatos/visualizacoes)
   const batch = db.batch();
