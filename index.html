@@ -1358,7 +1358,7 @@ body { font-family: "DM Sans", sans-serif; background: var(--bg); color: var(--t
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
           <div class="field-group" style="margin:0;">
             <div class="field-label">Responsável
-              <button class="transfer-btn" onclick="openTransfer()">📋 Delegar execução</button>
+              <button class="transfer-btn" onclick="openTransfer(currentChecklistClient?.pasta)">🔁 Trocar responsável</button>
             </div>
             <input class="field-input" id="cl-responsavel" readonly>
           </div>
@@ -1504,15 +1504,21 @@ body { font-family: "DM Sans", sans-serif; background: var(--bg); color: var(--t
 <!-- TRANSFER MODAL -->
 <div class="transfer-modal-overlay" id="transfer-modal">
   <div class="transfer-modal">
-    <h3>📋 Delegar Execução</h3>
-    <p id="transfer-subtitle" style="font-size:12px;color:var(--text2);margin-bottom:12px;">O responsável da pasta <strong>não muda</strong>. Define quem da dupla executa a tarefa.</p>
-    <div class="transfer-options" id="transfer-options"></div>
-    <div style="display:flex;justify-content:flex-end;gap:10px;">
-      <button class="btn btn-secondary" onclick="closeTransfer()">Cancelar</button>
-      <button class="btn btn-primary" id="transfer-confirm-btn" onclick="confirmTransfer()" disabled>Confirmar Delegação</button>
+    <div class="transfer-header">
+      <div>
+        <div class="transfer-title" id="transfer-title">Trocar Responsável</div>
+        <div class="transfer-subtitle" id="transfer-subtitle"></div>
+      </div>
+      <button class="transfer-close" onclick="closeTransfer()">✕</button>
+    </div>
+    <div class="transfer-body">
+      <div id="transfer-options" style="display:flex;flex-direction:column;gap:8px;margin-bottom:16px;"></div>
+      <div id="transfer-error" style="display:none;color:var(--red);font-size:12px;margin-bottom:8px;padding:8px;background:var(--red-bg);border-radius:6px;"></div>
+      <button id="transfer-confirm-btn" class="btn btn-primary" style="width:100%;" onclick="confirmTransfer()" disabled>Confirmar Transferência</button>
     </div>
   </div>
 </div>
+
 
 <!-- LIST MODAL -->
 <div class="modal-overlay" id="list-modal">
@@ -2007,26 +2013,22 @@ function renderKanban() {
     encerrado:              {title:'🗂️ Encerrado',            cls:'encerrado',     clients:[]},
   };
 
-  const ALL_CX = ['Alice Ribeiro da Silva','Camila Oliveira Carregosa','Adriane Viegas Martinez Cardoso','Franciele Vitória Flach','Larissa Bassan Suello Gonda','Bibiana das Virgens de Castilhos'];
-  const isCXFilter    = filterResp && ALL_CX.includes(filterResp);
-  const isInternFilter = filterResp && filterResp.startsWith('__intern_');
-  const internName    = isInternFilter ? filterResp.replace('__intern_', '') : null;
+  // Novo filtro: baseado em cs.responsavel (campo único)
+  // Converte nome completo → shortName para comparação
+  const _filterShort = filterResp ? (
+    Object.values(KANBAN_DATA.responsaveis).find(r=>r.name===filterResp)?.short ||
+    TODAS_PESSOAS.find(p=>p.displayName===filterResp)?.shortName ||
+    filterResp.replace('__intern_','')
+  ) : null;
 
   for(const [rname, rdata] of Object.entries(KANBAN_DATA.responsaveis)) {
-    // Advogado filter
-    if(filterResp && !isCXFilter && !isInternFilter) {
-      if(rname !== filterResp) continue;
-    }
-    // CX filter: include only this adv's carteira (CX is partner of this adv)
-    if(isCXFilter) {
-      if(CX_MAP[rname] !== filterResp) continue;
-    }
-    // Intern filter: include all advogados whose estagiario matches
-    if(isInternFilter) {
-      if(INTERN_MAP[rname] !== internName) continue;
-    }
     for(const [sec, clients] of Object.entries(rdata.sections)) {
       for(const c of clients) {
+        // Filtro por responsável: inclui a pasta se cs.responsavel === filtro selecionado
+        if(_filterShort) {
+          const resp = _getResponsavel(c.pasta, rdata.short);
+          if(resp !== _filterShort) continue;
+        }
         if(search) {
           const cxN = (CX_MAP[rname]||'').toLowerCase();
           const advN = rname.toLowerCase();
@@ -2744,186 +2746,116 @@ let transferSelectedTarget = null;
 // Para transferência, usamos o nome do CX como novo "responsável" (mas mantemos as seções do advogado)
 // A lógica aqui: delegação de execução (temporária) OU transferência de responsabilidade (permanente)
 
-function openTransfer() {
-  if(!currentChecklistClient) return;
-  const pasta = currentChecklistClient.pasta;
+function openTransfer(pasta) {
+  const client = findClient(pasta);
+  if(!client) return;
   const cs = getClientState(pasta);
-  const trueOwner = cs.responsavelOriginal || currentChecklistClient.responsavel;
-  const cxName = CX_MAP[trueOwner];
-  const internName = INTERN_MAP[trueOwner];
-  if(!cxName && !internName) { notify('Sem parceiro de dupla ou estagiário definido.'); return; }
-  const isDelegated = !!cs.delegadoPara;
-  const delegadoPara = cs.delegadoPara || null;
-  transferSelectedTarget = null;
-  window._transferMode = 'execucao'; // 'execucao' ou 'responsabilidade'
+  const titOriginal = Object.values(KANBAN_DATA.responsaveis)
+    .find(r => Object.values(r.sections).flat().some(p => p.pasta == pasta))?.short || '';
+  const respAtual = _getResponsavel(pasta, titOriginal);
+  const membros = _membrosDaDupla(titOriginal);
+
+  // Permissão: qualquer membro da dupla pode transferir
+  const userShort = _currentUser?.shortName;
+  const isGestor  = _currentUser?.role === 'gestor';
+  if(!isGestor && !membros.includes(userShort)) {
+    notify('⛔ Você não pertence à dupla desta pasta.');
+    return;
+  }
+
+  window._transferPasta    = pasta;
+  window._transferTitOrig  = titOriginal;
+  window._transferTarget   = null;
+
+  document.getElementById('transfer-title').textContent = 'Trocar Responsável';
+  document.getElementById('transfer-subtitle').textContent =
+    `${client.nome} · Pasta ${pasta} · Responsável atual: ${respAtual}`;
+  document.getElementById('transfer-error').style.display = 'none';
   document.getElementById('transfer-confirm-btn').disabled = true;
 
-  let bannerHtml = '';
-  if(isDelegated) {
-    const isInternDel = ['Julia','Matheus'].includes(delegadoPara);
-    bannerHtml = '<div style="background:var(--yellow-bg);border:1px solid var(--accent2);border-radius:8px;padding:10px 14px;margin-bottom:12px;display:flex;align-items:center;gap:10px;font-size:12px;">'
-      + '<span style="font-size:18px;">🔀</span>'
-      + '<div style="flex:1;"><strong>' + (isInternDel ? 'Delegada ao estagiário ' + delegadoPara : 'Delegada para execução por ' + delegadoPara.split(" ")[0]) + '</strong><br>'
-      + '<span style="color:var(--text3);">Responsável atual: <strong>' + trueOwner.split(" ")[0] + '</strong>'
-      + ' · Delegada em: ' + new Date(cs.delegadoEm||"").toLocaleDateString("pt-BR") + '</span></div>'
-      + '<button class="btn" style="background:var(--accent2);color:#fff;padding:5px 14px;font-size:12px;" onclick="undoTransfer()">↩️ Desfazer</button></div>';
-  }
+  // Monta opções: membros da dupla exceto o atual
+  const opts = membros.filter(m => m !== respAtual);
+  const LABELS = {
+    [titOriginal]: 'Titular da carteira',
+    ...Object.fromEntries(DUPLAS_CONFIG
+      .filter(d => d.tit === titOriginal)
+      .flatMap(d => [[d.cx,'Advogado CX da dupla'],[d.est,'Estagiário da dupla']]))
+  };
 
-  // Seletor de modo
-  const modeHtml = '<div style="display:flex;gap:8px;margin-bottom:14px;">'
-    + '<button id="mode-exec-btn" onclick="setTransferMode(\'execucao\')" style="flex:1;padding:8px;border-radius:8px;font-size:12px;font-weight:600;cursor:pointer;border:2px solid var(--accent);background:var(--accent);color:#fff;">🔀 Delegar execução<br><span style="font-weight:400;font-size:10px;">Responsável não muda nas metas</span></button>'
-    + '<button id="mode-resp-btn" onclick="setTransferMode(\'responsabilidade\')" style="flex:1;padding:8px;border-radius:8px;font-size:12px;font-weight:600;cursor:pointer;border:2px solid var(--border);background:var(--surface);color:var(--text);">🔁 Transferir responsabilidade<br><span style="font-weight:400;font-size:10px;">Muda o dono da carteira nas metas</span></button>'
-    + '</div>';
+  document.getElementById('transfer-options').innerHTML = opts.map(m => `
+    <div class="transfer-option" onclick="selectTransferTarget('${m}',this)" style="
+      display:flex;align-items:center;gap:12px;padding:12px 14px;
+      border:1px solid var(--border);border-radius:var(--radius);cursor:pointer;
+      background:var(--surface);transition:background .15s;">
+      <div style="width:36px;height:36px;border-radius:50%;background:var(--accent);
+        display:flex;align-items:center;justify-content:center;
+        color:#fff;font-weight:700;font-size:14px;flex-shrink:0;">${m.charAt(0)}</div>
+      <div>
+        <div style="font-weight:600;font-size:13px;">${m}</div>
+        <div style="font-size:11px;color:var(--text3);">${LABELS[m]||''}</div>
+      </div>
+    </div>`).join('');
 
-  document.getElementById("transfer-subtitle").innerHTML = bannerHtml + modeHtml
-    + '<div style="font-size:12px;color:var(--text2);padding:4px 0 10px;">Pasta <strong>' + pasta + '</strong> · ' + currentChecklistClient.nome
-    + '<br><span style="color:var(--accent);font-weight:600;">Responsável atual: ' + trueOwner.split(" ")[0] + ' ' + trueOwner.split(" ").slice(-1)[0] + '</span></div>';
-
-  const opts = [
-    { rname: trueOwner,  display: trueOwner,  role: "⚖️ Responsável atual",  isOwner: true,  color: 'var(--accent)',  isCurrent: !isDelegated },
-    ...(cxName ? [{ rname: cxName,    display: cxName,    role: "👤 Advogado CX da dupla", isOwner: false, color: 'var(--accent2)', isCurrent: isDelegated && cs.delegadoPara === cxName }] : []),
-    ...(internName ? [{ rname: internName, display: internName + ' (Estagiário)', role: "📋 Estagiário da dupla", isOwner: false, color: 'var(--purple)', isCurrent: isDelegated && cs.delegadoPara === internName }] : []),
-  ];
-
-  document.getElementById("transfer-options").innerHTML = opts.map(opt =>
-    '<div class="transfer-option' + (opt.isCurrent ? " selected" : "") + '" onclick="selectTransferTarget(' + "'" + opt.rname.replace(/'/g,"\\'") + "'" + ',this)">'
-    + '<div style="width:36px;height:36px;border-radius:50%;background:' + (opt.color||'var(--accent)') + ';display:flex;align-items:center;justify-content:center;color:#fff;font-weight:700;font-size:14px;flex-shrink:0;">' + opt.display.charAt(0) + '</div>'
-    + '<div style="flex:1;">'
-    + '<div class="transfer-option-name">' + opt.display + (opt.isCurrent ? ' <span style="font-size:10px;color:var(--text3);">(execução atual)</span>' : "") + '</div>'
-    + '<div class="transfer-option-cx">' + opt.role + '</div></div>'
-    + (opt.isOwner ? '<div style="font-size:10px;background:var(--blue-bg);color:var(--accent);padding:2px 7px;border-radius:12px;font-weight:600;">RESP.</div>' : "")
-    + "</div>"
-  ).join("");
-
-  document.getElementById("transfer-modal").classList.add("open");
+  document.getElementById('transfer-modal').classList.add('open');
 }
 
-function setTransferMode(mode) {
-  window._transferMode = mode;
-  const execBtn = document.getElementById('mode-exec-btn');
-  const respBtn = document.getElementById('mode-resp-btn');
-  if(!execBtn || !respBtn) return;
-  if(mode === 'execucao') {
-    execBtn.style.cssText = execBtn.style.cssText.replace(/border:[^;]+;background:[^;]+;color:[^;]+/, 'border:2px solid var(--accent);background:var(--accent);color:#fff');
-    respBtn.style.cssText = respBtn.style.cssText.replace(/border:[^;]+;background:[^;]+;color:[^;]+/, 'border:2px solid var(--border);background:var(--surface);color:var(--text)');
-    document.getElementById('transfer-subtitle-extra')?.remove();
-  } else {
-    execBtn.style.cssText = execBtn.style.cssText.replace(/border:[^;]+;background:[^;]+;color:[^;]+/, 'border:2px solid var(--border);background:var(--surface);color:var(--text)');
-    respBtn.style.cssText = respBtn.style.cssText.replace(/border:[^;]+;background:[^;]+;color:[^;]+/, 'border:2px solid var(--red);background:var(--red-bg);color:var(--red)');
-  }
-  // Reabilita botão confirm com base na seleção atual
-  if(transferSelectedTarget) {
-    document.getElementById('transfer-confirm-btn').disabled = false;
-    document.getElementById('transfer-confirm-btn').textContent = mode === 'responsabilidade'
-      ? '🔁 Transferir responsabilidade permanentemente'
-      : 'Confirmar Delegação';
-  }
+function selectTransferTarget(name, el) {
+  window._transferTarget = name;
+  document.querySelectorAll('.transfer-option').forEach(o => o.style.background = 'var(--surface)');
+  el.style.background = 'var(--blue-bg,#e8f0fe)';
+  document.getElementById('transfer-confirm-btn').disabled = false;
 }
 
-function selectTransferTarget(rname, el) {
-  transferSelectedTarget = rname;
-  document.querySelectorAll(".transfer-option").forEach(o=>o.classList.remove("selected"));
-  el.classList.add("selected");
-  const cs = getClientState(currentChecklistClient?.pasta);
-  const trueOwner = cs.responsavelOriginal || currentChecklistClient?.responsavel;
-  const currentExecutor = cs.delegadoPara || trueOwner;
-  const isChange = rname !== (window._transferMode === 'responsabilidade' ? trueOwner : currentExecutor);
-  document.getElementById("transfer-confirm-btn").disabled = !isChange;
-  document.getElementById('transfer-confirm-btn').textContent = window._transferMode === 'responsabilidade'
-    ? '🔁 Transferir responsabilidade permanentemente'
-    : 'Confirmar Delegação';
+function closeTransfer() {
+  document.getElementById('transfer-modal').classList.remove('open');
+  window._transferPasta = null;
+  window._transferTarget = null;
 }
 
-function confirmTransfer() {
-  if(!transferSelectedTarget || !currentChecklistClient) return;
-  const pasta = currentChecklistClient.pasta;
-  const cs = getClientState(pasta);
-  const trueOwner = cs.responsavelOriginal || currentChecklistClient.responsavel;
-  const currentExecutor = cs.delegadoPara || trueOwner;
-  const mode = window._transferMode || 'execucao';
+async function confirmTransfer() {
+  const pasta   = window._transferPasta;
+  const novoResp = window._transferTarget;
+  const titOrig = window._transferTitOrig;
+  if(!pasta || !novoResp) return;
 
-  if(mode === 'responsabilidade' && transferSelectedTarget !== trueOwner) {
-    // TRANSFERÊNCIA PERMANENTE: muda o responsável no clientState
-    // O Kanban_DATA não muda (pasta continua na coluna do titular original),
-    // mas o _titularMap e metas passam a usar o novo responsável
-    cs.responsavelOriginal = trueOwner;     // guarda o original
-    cs.responsavelAtual = transferSelectedTarget; // novo responsável para metas/log
-    cs.delegadoPara = null;                 // remove delegação de execução (são a mesma pessoa agora)
-    cs.delegadoEm = null;
-    cs.responsabilidadeTransferidaEm = new Date().toISOString();
-    setClientState(pasta, cs);
-    const _exec = _currentUser?.shortName || trueOwner.split(' ')[0];
-    addActivityLog({ type:'contato', pasta, nome:currentChecklistClient.nome,
-      resp: _exec, titular: transferSelectedTarget.split(' ')[0],
-      fase: `🔁 Responsabilidade transferida de ${trueOwner.split(' ')[0]} para ${transferSelectedTarget.split(' ')[0]}` });
-    notify(`🔁 Responsabilidade transferida para ${transferSelectedTarget.split(' ')[0]}`);
-    document.getElementById("cl-responsavel").value = transferSelectedTarget;
+  const client = findClient(pasta);
+  const anterior = _setResponsavel(pasta, novoResp, titOrig, _currentUser?.shortName);
 
-  } else {
-    // DELEGAÇÃO DE EXECUÇÃO (comportamento original)
-    if(transferSelectedTarget === currentExecutor) { closeTransfer(); return; }
-    if(transferSelectedTarget === trueOwner) {
-      cs.delegadoPara = null;
-      cs.delegadoEm = null;
-    } else {
-      cs.responsavelOriginal = trueOwner;
-      cs.delegadoPara = transferSelectedTarget;
-      cs.delegadoEm = new Date().toISOString();
-    }
-    setClientState(pasta, cs);
-    document.getElementById("cl-responsavel").value = trueOwner;
-    _refreshChecklistDelegBanner(cs, trueOwner);
-    const _exec = _currentUser?.shortName || trueOwner.split(' ')[0];
-    const msg = transferSelectedTarget === trueOwner
-      ? "Execução devolvida para " + trueOwner.split(" ")[0]
-      : "Delegado para " + transferSelectedTarget.split(" ")[0] + " (resp: " + trueOwner.split(" ")[0] + ")";
-    addActivityLog({ type:"contato", pasta, nome:currentChecklistClient.nome,
-      resp: _exec, titular: trueOwner.split(" ")[0], fase: msg });
-    notify(transferSelectedTarget === trueOwner
-      ? "↩️ Execução devolvida para " + trueOwner.split(" ")[0]
-      : "🔀 Delegado para " + transferSelectedTarget.split(" ")[0]);
-  }
+  addActivityLog({
+    type: 'contato', pasta, nome: client?.nome || '',
+    resp: _currentUser?.shortName,
+    titular: titOrig,
+    fase: `🔁 Responsável: ${anterior} → ${novoResp}`
+  });
 
+  notify(`✅ Responsável alterado: ${anterior} → ${novoResp}`);
   closeTransfer();
   renderKanban();
-  renderResponsaveis();
-}
+  renderDashboard();
 
-function undoTransfer() {
-  if(!currentChecklistClient) return;
-  const pasta = currentChecklistClient.pasta;
-  const cs = getClientState(pasta);
-  if(!cs.delegadoPara) { notify("Esta pasta não está delegada."); return; }
-  const trueOwner = cs.responsavelOriginal || currentChecklistClient.responsavel;
-  cs.delegadoPara = null;
-  cs.delegadoEm = null;
-  setClientState(pasta, cs);
-  document.getElementById("cl-responsavel").value = trueOwner;
-  _refreshChecklistDelegBanner(cs, trueOwner);
-  const _exec = _currentUser?.shortName || trueOwner.split(' ')[0];
-  addActivityLog({ type:"contato", pasta, nome:currentChecklistClient.nome,
-    resp: _exec, titular: trueOwner.split(" ")[0],
-    fase:"Delegação desfeita — execução voltou para " + trueOwner.split(" ")[0] });
-  notify("↩️ Delegação desfeita — pasta volta para " + trueOwner.split(" ")[0]);
-  closeTransfer();
-  renderKanban();
-  renderResponsaveis();
-}
-function _refreshChecklistDelegBanner(cs, trueOwner) {
-  const b = document.getElementById('cl-delegation-banner');
-  if(!b) return;
-  if(cs.delegadoPara) {
-    b.style.display = 'flex';
-    const isIntern = ['Julia','Matheus'].includes(cs.delegadoPara);
-    document.getElementById('cl-del-to').textContent = isIntern
-      ? `Delegada ao estagiário ${cs.delegadoPara}`
-      : `Delegada para execução por ${cs.delegadoPara}`;
-    const dataStr = cs.delegadoEm ? ' · Delegada em ' + new Date(cs.delegadoEm).toLocaleDateString('pt-BR') : '';
-    document.getElementById('cl-del-meta').textContent = `Responsável permanece: ${(trueOwner||'').split(' ')[0]}${dataStr}`;
-  } else {
-    b.style.display = 'none';
+  // Atualiza checklist se estiver aberta nesta pasta
+  if(currentChecklistClient?.pasta == pasta) {
+    const cs = getClientState(pasta);
+    document.getElementById('cl-responsavel').value = novoResp;
+    _atualizarBannerResponsavel(cs, novoResp, titOrig);
   }
 }
+
+
+function _atualizarBannerResponsavel(cs, respAtual, titOrig) {
+  const banner = document.getElementById('cl-delegation-banner');
+  if(!banner) return;
+  if(respAtual !== titOrig) {
+    banner.style.display = 'flex';
+    document.getElementById('cl-del-to').textContent = `Responsável: ${respAtual}`;
+    const dataStr = cs.transferidoEm
+      ? ' · desde ' + new Date(cs.transferidoEm).toLocaleDateString('pt-BR') : '';
+    document.getElementById('cl-del-meta').textContent = `Titular original: ${titOrig}${dataStr}`;
+  } else {
+    banner.style.display = 'none';
+  }
+}
+
 function closeTransfer() {
   document.getElementById('transfer-modal').classList.remove('open');
   transferSelectedTarget = null;
@@ -2955,19 +2887,20 @@ function openChecklist(pasta) {
   const faseInfo = FASE_LABELS[client.secao] || {label: client.secao || '—'};
   document.getElementById('checklist-subtitle').textContent = `Pasta ${client.pasta} · ${client.tipo} · Fase original: ${faseInfo.label}`;
   const cs = getClientState(pasta);
-  // Always show the true owner as responsável — never the executor
-  const trueOwnerDisplay = cs.responsavelOriginal || client.responsavel || '';
-  document.getElementById('cl-responsavel').value = trueOwnerDisplay;
-  // Delegation banner
+  // Responsável atual (campo único)
+  const titOriginal = Object.values(KANBAN_DATA.responsaveis)
+    .find(r => Object.values(r.sections).flat().some(p => p.pasta == pasta))?.short || '';
+  const respAtual   = _getResponsavel(pasta, titOriginal);
+  const titOrig     = _getTitular(pasta, titOriginal);
+  document.getElementById('cl-responsavel').value = respAtual;
+  // Banner de transferência
   const banner = document.getElementById('cl-delegation-banner');
-  if(cs.delegadoPara) {
+  if(respAtual !== titOrig) {
     banner.style.display = 'flex';
-    const isIntern = ['Julia','Matheus'].includes(cs.delegadoPara);
-    document.getElementById('cl-del-to').textContent = isIntern
-      ? `Delegada ao estagiário ${cs.delegadoPara}`
-      : `Delegada para execução por ${cs.delegadoPara}`;
-    const dataStr = cs.delegadoEm ? ' · Delegada em ' + new Date(cs.delegadoEm).toLocaleDateString('pt-BR') : '';
-    document.getElementById('cl-del-meta').textContent = `Responsável permanece: ${(cs.responsavelOriginal||client.responsavel).split(' ')[0]}${dataStr}`;
+    document.getElementById('cl-del-to').textContent = `Responsável: ${respAtual}`;
+    const dataStr = cs.transferidoEm
+      ? ' · desde ' + new Date(cs.transferidoEm).toLocaleDateString('pt-BR') : '';
+    document.getElementById('cl-del-meta').textContent = `Titular original: ${titOrig}${dataStr}`;
   } else {
     banner.style.display = 'none';
   }
@@ -3025,8 +2958,10 @@ function saveChecklist() {
   setClientState(currentChecklistClient.pasta, cs);
   // Log if status changed or a step was newly checked
   // Executor = quem está logado. Titular = dono da carteira (pode ser diferente)
-  const _executor = _currentUser?.shortName || (currentChecklistClient.responsavel||'').split(' ')[0];
-  const _titular  = (currentChecklistClient.responsavel||'').split(' ')[0];
+  const _titOriginal = Object.values(KANBAN_DATA.responsaveis)
+    .find(r => Object.values(r.sections).flat().some(p => p.pasta == currentChecklistClient.pasta))?.short || '';
+  const _executor = _currentUser?.shortName || _titOriginal;
+  const _titular  = _getTitular(currentChecklistClient.pasta, _titOriginal);
 
   if(newStatus !== prevStatus) {
     addActivityLog({
@@ -4125,6 +4060,62 @@ function _getMetas() {
 }
 
 // Calcula métricas da semana atual — individuais + por dupla
+// ==================== RESPONSÁVEL ÚNICO ====================
+// Regra única para saber quem é o responsável de uma pasta.
+// Migração suave: lê campo novo (cs.responsavel) OU campos legados.
+const DUPLAS_CONFIG = [
+  { tit:'Bruno',    cx:'Alice',     est:'Julia'   },
+  { tit:'Douglas',  cx:'Franciele', est:'Julia'   },
+  { tit:'Stalin',   cx:'Camila',    est:'Julia'   },
+  { tit:'Fernando', cx:'Adriane',   est:'Matheus' },
+  { tit:'Janaina',  cx:'Larissa',   est:'Matheus' },
+  { tit:'Vitoria',  cx:'Bibiana',   est:'Matheus' },
+];
+
+// Dado o shortName do titular original, retorna membros válidos da dupla
+function _membrosDaDupla(titOriginal) {
+  const d = DUPLAS_CONFIG.find(d => d.tit === titOriginal);
+  if(!d) return [titOriginal];
+  return [d.tit, d.cx, d.est];
+}
+
+// Responsável atual de uma pasta (shortName)
+// Ordem: cs.responsavel (novo) > cs.delegadoPara (legado) > cs.responsavelAtual (legado) > titular original
+function _getResponsavel(pasta, titOriginal) {
+  const cs = getClientState(pasta);
+  return cs.responsavel || cs.delegadoPara || cs.responsavelAtual || titOriginal;
+}
+
+// Titular original (a carteira onde a pasta sempre pertence)
+function _getTitular(pasta, titOriginal) {
+  const cs = getClientState(pasta);
+  return cs.responsavelOriginal || titOriginal;
+}
+
+// Salva novo responsável — grava cs.responsavel e preserva titular original
+function _setResponsavel(pasta, novoResp, titOriginal, quemTransferiu) {
+  const cs = getClientState(pasta);
+  const anterior = cs.responsavel || cs.delegadoPara || cs.responsavelAtual || titOriginal;
+  const titOrig   = cs.responsavelOriginal || titOriginal;
+  const updated = {
+    ...cs,
+    responsavel:          novoResp,
+    responsavelOriginal:  titOrig,
+    transferidoEm:        new Date().toISOString(),
+    transferidoPor:       quemTransferiu,
+    // limpa campos legados
+    delegadoPara:         null,
+    delegadoEm:           null,
+    responsavelAtual:     null,
+    responsavelOverride:  null,
+    transferredFrom:      null,
+    responsabilidadeTransferidaEm: null,
+  };
+  setClientState(pasta, updated);
+  return anterior;
+}
+// ==================== FIM RESPONSÁVEL ÚNICO ====================
+
 // ==================== FONTE ÚNICA DE VERDADE ====================
 // Calcula estatísticas de cada pessoa varrendo _stateCache (Firestore) como fonte primária.
 // Usado por: metas semanais, desempenho histórico, recalcular estatísticas.
@@ -4145,19 +4136,17 @@ function _calcularEstatisticasPastas() {
     const titOriginal = rdata.short;
     for(const pastas of Object.values(rdata.sections)) {
       for(const pasta of pastas) {
-        const cs = getClientState(pasta.pasta);
+        const cs  = getClientState(pasta.pasta);
         const pid = String(pasta.pasta);
         const st  = cs.status || '';
 
-        // Executor: delegadoPara > responsavelAtual > titular original
-        // (mesma hierarquia em todo o sistema)
-        const exec = cs.delegadoPara || cs.responsavelAtual || titOriginal;
+        // Fonte única: _getResponsavel usa campo novo ou legado automaticamente
+        const resp = _getResponsavel(pasta.pasta, titOriginal);
 
-        // Para cada status final, log tem precedência (captura quem estava logado na hora)
-        // Se log não tem o evento (>200 entradas), usa executor atual
-        const quemAjuizou  = logIdx[pid+'|ajuizado']       || (st==='ajuizado'       ? exec : null);
-        const quemIncom    = logIdx[pid+'|incomunicavel']   || (st==='incomunicavel'  ? exec : null);
-        const quemEncerrou = logIdx[pid+'|encerrado']       || (st==='encerrado'      ? exec : null);
+        // Log tem precedência quando disponível (captura quem estava logado na hora exata)
+        const quemAjuizou  = logIdx[pid+'|ajuizado']     || (st==='ajuizado'      ? resp : null);
+        const quemIncom    = logIdx[pid+'|incomunicavel'] || (st==='incomunicavel' ? resp : null);
+        const quemEncerrou = logIdx[pid+'|encerrado']     || (st==='encerrado'     ? resp : null);
 
         ensure(titOriginal);
         result[titOriginal].total++;
@@ -4189,14 +4178,8 @@ function _calcularSemanaAtual() {
 
   // pasta → titular atual (considera responsavelAtual se houve transferência)
   const _titularMap = {};
-  // pasta → executor atual (responsavelAtual ou delegadoPara se houver)
-  const _executorAtualMap = {};
   for(const c of allPastas) {
-    const cs = getClientState(c.pasta);
-    const titular = cs.responsavelAtual || c._short;
-    _titularMap[String(c.pasta)] = titular;
-    // Executor atual: se tem delegação ativa, é o delegatário; senão é o titular atual
-    _executorAtualMap[String(c.pasta)] = cs.delegadoPara || titular;
+    _titularMap[String(c.pasta)] = _getTitular(c.pasta, c._short);
   }
 
   const _DUPLAS_MAP = [
@@ -4231,28 +4214,8 @@ function _calcularSemanaAtual() {
     const pastaId = item.pasta ? String(item.pasta) : null;
 
     // ── Resolve executor real ────────────────────────────────────────
-    // item.resp = quem registrou (pode ser titular antigo em logs pré-correção)
-    // item.titular = dono da carteira (só existe em logs pós-correção)
-    // Para logs antigos sem item.titular: usamos _executorAtualMap para inferir
-    // quem está de fato executando aquela pasta hoje
     let executor = item.resp;
     let titular  = item.titular || (pastaId ? (_titularMap[pastaId] || executor) : executor);
-
-    // Correção para logs antigos: se item.resp === titular da pasta
-    // mas a pasta tem delegação ativa, o executor real provavelmente é o CX
-    if(!item.titular && pastaId) {
-      const executorAtual = _executorAtualMap[pastaId];
-      // Se o resp do log é o titular E há um executor diferente (CX ou estagiário)
-      // E esse executor pertence à mesma dupla → atribui ao executor atual
-      if(executorAtual && executorAtual !== executor) {
-        const membroResp = _membroDupla[executor];
-        const membroExec = _membroDupla[executorAtual];
-        // Só corrige se ambos são da mesma dupla (evita atribuição errada)
-        if(membroResp && membroExec && membroResp.titShort === (membroExec.isCX ? membroExec.titShort : membroResp.titShort)) {
-          executor = executorAtual;
-        }
-      }
-    }
 
     ensure(executor);
     ensure(titular);
@@ -4311,16 +4274,15 @@ function transferirResponsabilidadeEmMassa() {
   ];
   const cxDeTitular = Object.fromEntries(_DUPLAS_MAP.map(d=>[d.titShort, d.cx]));
 
-  // Coleta pastas delegadas ao CX da dupla (não ao estagiário)
+  // Coleta pastas com delegação legada (delegadoPara) ainda não migradas para cs.responsavel
   const paraTransferir = [];
-  for(const c of allPastas) {
-    const cs = getClientState(c.pasta);
-    if(!cs.delegadoPara) continue;
-    if(['Julia','Matheus'].includes(cs.delegadoPara)) continue; // estagiário: não transfere
-    const cx = cxDeTitular[c._short];
-    if(cs.delegadoPara !== cx) continue; // delegado para outro, não o CX da dupla
-    if(cs.responsavelAtual && cs.responsavelAtual !== c._short) continue; // já transferido
-    paraTransferir.push({ pasta: c.pasta, nome: c.nome, titular: c._short, novResp: cx });
+  for(const p of allPastas) {
+    const cs = getClientState(p.pasta);
+    // Só migra pastas que ainda usam campo legado e não têm cs.responsavel
+    if(cs.responsavel) continue; // já migrado
+    if(!cs.delegadoPara && !cs.responsavelAtual) continue; // sem delegação
+    const resp = cs.delegadoPara || cs.responsavelAtual;
+    paraTransferir.push({ pasta: p.pasta, nome: p.nome, titular: p._short, novResp: resp });
   }
 
   if(paraTransferir.length === 0) {
@@ -4347,15 +4309,11 @@ function transferirResponsabilidadeEmMassa() {
   let transferidas = 0;
   const _exec = _currentUser?.shortName || 'Gestor';
   for(const p of paraTransferir) {
-    const cs = getClientState(p.pasta);
-    cs.responsavelAtual = p.novResp;
-    cs.responsavelOriginal = cs.responsavelOriginal || p.titular;
-    cs.responsabilidadeTransferidaEm = new Date().toISOString();
-    setClientState(p.pasta, cs);
+    _setResponsavel(p.pasta, p.novResp, p.titular, _exec);
     addActivityLog({
       type: 'contato', pasta: p.pasta, nome: p.nome,
-      resp: _exec, titular: p.novResp,
-      fase: `🔁 Responsabilidade: ${p.titular} → ${p.novResp}`
+      resp: _exec, titular: p.titular,
+      fase: `🔁 Migração: ${p.titular} → ${p.novResp}`
     });
     transferidas++;
   }
@@ -4437,14 +4395,20 @@ function renderMetasPanel() {
   // Filtra o log pela pasta (âncora objetiva), não pelo nome inferido da dupla.
   // Funciona para qualquer pessoa — titular, CX ou estagiário.
   function _porPasta(shortName, type, titShort) {
+    // Pastas onde shortName É ATUALMENTE RESPONSÁVEL dentro desta carteira
     const rdataE = Object.entries(KANBAN_DATA.responsaveis).find(([,v]) => v.short === titShort);
     if(!rdataE) return 0;
-    const pastas = new Set(Object.values(rdataE[1].sections).flat().map(c => String(c.pasta)));
+    const todasPastas = Object.values(rdataE[1].sections).flat();
+    // Filtra só as pastas onde shortName é o responsável atual
+    const pastasDesteResp = new Set(
+      todasPastas.filter(p => _getResponsavel(p.pasta, titShort) === shortName).map(p => String(p.pasta))
+    );
+    if(pastasDesteResp.size === 0) return 0;
     const hoje = new Date(), d0 = hoje.getDay() === 0 ? 6 : hoje.getDay() - 1;
     const ini = new Date(hoje); ini.setDate(hoje.getDate() - d0); ini.setHours(0,0,0,0);
     return (_logCache.entries || []).filter(i =>
       i.resp === shortName && i.type === type && i.ts && new Date(i.ts) >= ini
-      && pastas.has(String(i.pasta || ''))
+      && pastasDesteResp.has(String(i.pasta || ''))
     ).length;
   }
 
