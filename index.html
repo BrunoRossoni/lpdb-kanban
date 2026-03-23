@@ -51,8 +51,8 @@ const USUARIOS = [
   { login: 'larissa',   displayName: 'Larissa Bassan Suello Gonda', role: 'advogado',   shortName: 'Larissa'  },
   { login: 'bibiana',   displayName: 'Bibiana das Virgens de Castilhos', role: 'advogado', shortName: 'Bibiana' },
   // ESTAGIÁRIOS
-  { login: 'julia',     displayName: 'Julia (Estagiária)',          role: 'estagiario', shortName: 'Julia'    },
-  { login: 'matheus',   displayName: 'Matheus (Estagiário)',        role: 'estagiario', shortName: 'Matheus'  },
+  { login: 'julia',     displayName: 'Júlia Heckler',          role: 'estagiario', shortName: 'Julia'    },
+  { login: 'matheus',   displayName: 'Matheus Carvalho Hackenhaar',        role: 'estagiario', shortName: 'Matheus'  },
 ];
 
 // Usuário da sessão atual
@@ -781,8 +781,8 @@ body { font-family: "DM Sans", sans-serif; background: var(--bg); color: var(--t
           <option value="bibiana">Bibiana das Virgens de Castilhos</option>
         </optgroup>
         <optgroup label="📋 Estagiários">
-          <option value="julia">Julia</option>
-          <option value="matheus">Matheus</option>
+          <option value="julia">Júlia Heckler</option>
+          <option value="matheus">Matheus Carvalho Hackenhaar</option>
         </optgroup>
               </select>
     </div>
@@ -2670,7 +2670,8 @@ const DOC_ITEMS = [
 
 function getDocs(pasta) {
   const cs = getClientState(pasta);
-  return cs.docs || {};
+  // Retorna cópia profunda para evitar mutação direta do _stateCache
+  return JSON.parse(JSON.stringify(cs.docs || {}));
 }
 function saveDocs(pasta, docs) {
   const cs = getClientState(pasta);
@@ -2960,8 +2961,8 @@ function openChecklist(pasta) {
                      else     { checkDiv.classList.remove('checked'); checkDiv.textContent = ''; } }
     });
 
-    // Datas de contato
-    ['whats1','whats2','whats3'].forEach(step => {
+    // Datas de contato — restaura para todos os steps
+    ALL_STEPS.forEach(step => {
       const el = document.getElementById('date-' + step);
       if(el) el.value = (cs.dates && cs.dates[step]) || '';
     });
@@ -3617,8 +3618,8 @@ const TODAS_PESSOAS = [
   { short:'Camila',    display:'Camila Oliveira Carregosa',       login:'camila',    tipo:'cx', isCX:true, advTitular:'Stalin'   },
   { short:'Bibiana',   display:'Bibiana das Virgens de Castilhos',login:'bibiana',   tipo:'cx', isCX:true, advTitular:'Vitoria'  },
   // Estagiários
-  { short:'Julia',     display:'Julia (Estagiária)',              login:'julia',     tipo:'est', isCX:false, dupla:null },
-  { short:'Matheus',   display:'Matheus (Estagiário)',            login:'matheus',   tipo:'est', isCX:false, dupla:null },
+  { short:'Julia',     display:'Júlia Heckler',              login:'julia',     tipo:'est', isCX:false, dupla:null },
+  { short:'Matheus',   display:'Matheus Carvalho Hackenhaar',            login:'matheus',   tipo:'est', isCX:false, dupla:null },
 ];
 function isCXMode() {
   return localStorage.getItem('lpdb_cx_mode') === '1';
@@ -3982,8 +3983,8 @@ function _renderPresenceCards(ultima, contagem) {
   // Título seção estagiários
   cards += '<div style="grid-column:1/-1;margin:12px 0 4px;font-family:\'DM Serif Display\';font-size:16px;color:var(--accent);">📋 Estagiários</div>';
   cards += '<div style="grid-column:1/-1;display:flex;gap:10px;flex-wrap:wrap;">';
-  cards += _mkCard('Julia',   'Julia (Estagiária)',  'Estagiária', 'Bruno · Douglas · Stalin');
-  cards += _mkCard('Matheus', 'Matheus (Estagiário)', 'Estagiário', 'Fernando · Janaina · Vitoria');
+  cards += _mkCard('Julia',   'Júlia Heckler',  'Estagiária', 'Bruno · Douglas · Stalin');
+  cards += _mkCard('Matheus', 'Matheus Carvalho Hackenhaar', 'Estagiário', 'Fernando · Janaina · Vitoria');
   cards += '</div>';
 
   // Conta todos para o resumo (advogados + CX + estagiários)
@@ -5366,6 +5367,8 @@ function saveChecklist() {
 }
 
 function closeChecklist() {
+  // Salva estado atual antes de fechar
+  try { saveChecklist(); } catch(e) {}
   document.getElementById('checklist-modal').classList.remove('open');
   currentChecklistClient = null;
   renderKanban();
