@@ -1004,6 +1004,10 @@ body { font-family: "DM Sans", sans-serif; background: var(--bg); color: var(--t
         <option value="Larissa Bassan Suello Gonda">Larissa Bassan Suello Gonda</option>
         <option value="Bibiana das Virgens de Castilhos">Bibiana das Virgens de Castilhos</option>
       </optgroup>
+      <optgroup label="📋 Estagiários">
+        <option value="Julia">Júlia Heckler</option>
+        <option value="Matheus">Matheus Carvalho Hackenhaar</option>
+      </optgroup>
           </select>
     <input class="search-input" style="max-width:260px;" placeholder="Buscar cliente ou nº pasta..." id="kanban-search" oninput="renderKanban()">
     <select class="filter-select" id="kanban-sort" onchange="renderKanban()" title="Ordenar cards">
@@ -2531,6 +2535,61 @@ function renderResponsaveis() {
       </div>
     </div>`;
   }
+  // ── Estagiários ──────────────────────────────────────────────────────────
+  for(const [internName, internClients] of Object.entries(KANBAN_DATA.estagiarios)) {
+    const displayName = internName === 'Julia' ? 'Júlia Heckler' : 'Matheus Carvalho Hackenhaar';
+    const total   = internClients.length;
+    const done    = internClients.filter(c => getClientState(c.pasta).internStatus === 'concluido').length;
+    const pending = total - done;
+    const rows = internClients.slice(0,5).map(c => {
+      const cs  = getClientState(c.pasta);
+      const ist = cs.internStatus || 'pendente';
+      const stLabel = ist==='concluido'?'✅':ist==='em-analise'?'🔍':'⏳';
+      return `<tr>
+        <td class="pasta-num">${c.pasta}</td>
+        <td style="font-size:12px;">${c.nome}</td>
+        <td>${diasBadge(c.dias)}</td>
+        <td class="client-action" onclick="openChecklist(${c.pasta})">${stLabel}</td>
+      </tr>`;
+    }).join('');
+    const moreBtn = internClients.length > 5
+      ? `<tr><td colspan="4" style="text-align:center;padding:8px;font-size:11px;color:var(--accent);cursor:pointer;font-weight:600;"
+          onclick="showPage('estagiarios',null)">+ ${internClients.length-5} pastas — ver tudo →</td></tr>` : '';
+    html += `<div class="resp-card">
+      <div class="resp-header">
+        <div class="resp-name">${displayName}</div>
+        <span class="resp-intern" style="background:var(--blue-bg);color:var(--blue);">Estagiário</span>
+      </div>
+      <div class="resp-stats" style="flex-wrap:wrap;gap:0;">
+        <div class="resp-stat" style="border-right:1px solid var(--border);padding:10px 8px;">
+          <div class="resp-stat-num">${total}</div>
+          <div class="resp-stat-label">Total</div>
+        </div>
+        <div class="resp-stat" style="border-right:1px solid var(--border);padding:10px 8px;">
+          <div class="resp-stat-num" style="color:var(--green);">${done}</div>
+          <div class="resp-stat-label">Concluídas</div>
+        </div>
+        <div class="resp-stat" style="padding:10px 8px;">
+          <div class="resp-stat-num" style="color:var(--accent2);">${pending}</div>
+          <div class="resp-stat-label">Pendentes</div>
+        </div>
+      </div>
+      <div class="resp-sections">
+        <div class="resp-section">
+          <div class="resp-section-header" style="cursor:default;">
+            <div class="resp-section-title"><span class="dot blue"></span>📋 Pastas em Análise</div>
+            <span class="resp-section-count">${total}</span>
+          </div>
+          <div style="overflow:hidden;display:block;">
+            <table style="width:100%;border-collapse:collapse;font-size:12px;">
+              <tbody>${rows}${moreBtn}</tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </div>`;
+  }
+
   grid.innerHTML = html;
 }
 function mkRespSec(rname, sec, title, color, clients) {
