@@ -232,6 +232,8 @@ function _registrarAcesso(user) {
 
 // Inicialização com controle de login
 let _appIniciado = false;
+let _cobrancaAtiva = null;
+let currentIntern = 'Julia';
 
 // Cache local para leituras síncronas (Firestore é async)
 const _stateCache = {};
@@ -1370,7 +1372,7 @@ body { font-family: "DM Sans", sans-serif; background: var(--bg); color: var(--t
       <!-- Header fields always visible -->
       <div style="padding:16px 20px 12px;border-bottom:1px solid var(--border);background:var(--surface);">
         <!-- Delegation banner — shown when delegated -->
-        <div id="cl-delegation-banner" style="display:none;background:var(--yellow-bg);border:1px solid var(--accent2);border-radius:8px;padding:10px 14px;margin-bottom:12px;display:flex;align-items:center;gap:10px;font-size:12px;">
+        <div id="cl-delegation-banner" style="display:none;background:var(--yellow-bg);border:1px solid var(--accent2);border-radius:8px;padding:10px 14px;margin-bottom:12px;align-items:center;gap:10px;font-size:12px;">
           <span style="font-size:18px;">🔀</span>
           <div style="flex:1;">
             <strong id="cl-del-to">Delegada para execução</strong><br>
@@ -1739,7 +1741,7 @@ function renderDashboard() {
     const all = [...Object.values(rdata.sections).flat()];
     const DONE = ['ajuizado','incomunicavel','encerrado','reativado'];
     const active = all.filter(c=>!DONE.includes(getClientState(c.pasta).status||''));
-    const aa = rdata.sections.aguardando_ajuizamento.filter(c=>{const cs=getClientState(c.pasta);return !cs.status||cs.status==='em_contato'||cs.status==='aguardando_ajuizamento';}).length;
+    const aa = rdata.sections.aguardando_ajuizamento.filter(c=>{const cs=getClientState(c.pasta);const st=cs.status||''; return !DONE.includes(st) && (st===''||st==='em_contato'||st==='aguardando_ajuizamento');}).length;
     const pr = rdata.sections.preparacao.filter(c=>!DONE.includes(getClientState(c.pasta).status||'')).length;
     const df = [...((rdata.sections.administrativa)||[]),...((rdata.sections.administrativa_2inst)||[]),...((rdata.sections.aguardando_providencia)||[]),...((rdata.sections.aguardando_autorizacao)||[])].filter(c=>!DONE.includes(getClientState(c.pasta).status||'')).length;
     const ajuizR = all.filter(c=>getClientState(c.pasta).status==='ajuizado').length;
@@ -2162,8 +2164,8 @@ function onDragEndKanban(event) {
 function onDropKanban(event, targetCol) {
   event.preventDefault();
   document.querySelectorAll('.col-body.drag-over').forEach(el => el.classList.remove('drag-over'));
-  const pasta = dragPasta || Number(event.dataTransfer.getData('text/plain'));
-  if(!pasta || targetCol === dragOrigCol) return;
+  const pasta = dragPasta != null ? dragPasta : Number(event.dataTransfer.getData('text/plain'));
+  if(pasta == null || pasta === '' || targetCol === dragOrigCol) return;
 
   const cs = getClientState(pasta);
   const colLabel = {
@@ -2970,13 +2972,7 @@ function _atualizarBannerResponsavel(cs, respAtual, titOrig) {
   }
 }
 
-function closeTransfer() {
-  document.getElementById('transfer-modal').classList.remove('open');
-  transferSelectedTarget = null;
-}
-document.getElementById('transfer-modal').addEventListener('click', e => {
-  if(e.target === document.getElementById('transfer-modal')) closeTransfer();
-});
+// (closeTransfer duplicada removida — usar a definição acima)
 
 function _switchModalTabBase(tab) {
   document.querySelectorAll('.modal-tab').forEach(b => b.classList.remove('active'));
@@ -3124,8 +3120,7 @@ function _calcularSemanaAtual() {
 }
 
 
-document.getElementById('checklist-modal').addEventListener('click', e => { if(e.target===document.getElementById('checklist-modal')) closeChecklist(); });
-document.getElementById('list-modal').addEventListener('click', e => { if(e.target===document.getElementById('list-modal')) closeListModal(); });
+// (event listeners de modais movidos para _init() — o DOM ainda não existe aqui)
 
 // ==================== INTERNS ====================
 function showIntern(name, btn) {
@@ -3182,162 +3177,6 @@ function saveInternDetail(pasta) {
   notify('✅ Análise salva');
   closeListModal();
 }
-
-function renderMetasPanel() {
-  const { realizado, inicioSemana, fimSemana } = _calcularSemanaAtual();
-  const metas  = _getMetas();
-  const mDupla = metas.dupla || METAS_DEFAULT.dupla;
-  const fmt    = d => d.toLocaleDateString('pt-BR', {day:'2-digit', month:'2-digit'});
-
-  document.getElementById('metas-semana-label').textContent =
-    `Semana: ${fmt(inicioSemana)} – ${fmt(fimSemana)}  ·  Contatos e ajuizamentos por responsável atual da pasta`;
-
-  const DONE = ['ajuizado','incomunicavel','encerrado','reativado'];
-  const DUPLAS = [
-    { tit:'Bruno',    cx:'Alice',     est:'Julia'   },
-    { tit:'Douglas',  cx:'Franciele', est:'Julia'   },
-    { tit:'Stalin',   cx:'Camila',    est:'Julia'   },
-    { tit:'Fernando', cx:'Adriane',   est:'Matheus' },
-    { tit:'Janaina',  cx:'Larissa',   est:'Matheus' },
-    { tit:'Vitoria',  cx:'Bibiana',   est:'Matheus' },
-  ];
-
-  // ── Helpers ──────────────────────────────────────────────────────
-  const _col = (v,m) => m>0 ? (v>=m?'var(--green)':v>0?'var(--accent2)':'var(--red)') : 'var(--text)';
-
-  function _bar(v, m) {
-    const pct = Math.min(100, m>0 ? Math.round(v/m*100) : 0);
-    return `<div style="height:4px;background:rgba(255,255,255,.25);border-radius:3px;margin-top:4px;width:72px;">
-      <div style="height:4px;width:${pct}%;background:#fff;border-radius:3px;"></div></div>
-      <div style="font-size:9px;color:rgba(255,255,255,.6);margin-top:1px;">${pct}%</div>`;
-  }
-
-  function _semTag(v, m) {
-    if(!m) return '';
-    const pct = v/m;
-    const [bg,fg,t] = pct>=1?['#EAF3DE','#3B6D11','✓ Meta']:pct>=.5?['#FAEEDA','#854F0B','Parcial']:['#FCEBEB','#A32D2D','Abaixo'];
-    return `<span style="font-size:10px;padding:2px 8px;border-radius:10px;background:${bg};color:${fg};font-weight:500;">${t}</span>`;
-  }
-
-  function _num(v, m) {
-    return `<span style="font-family:'DM Serif Display';font-size:18px;color:${_col(v,m)};">${v}</span>`
-         + (m>0 ? `<span style="font-size:10px;color:var(--text3);margin-left:1px;">/${m}</span>` : '');
-  }
-
-  function _contrib(v) {
-    return `<span style="font-family:'DM Serif Display';font-size:18px;color:var(--text);">${v||0}</span>`;
-  }
-
-  // ── Totais da dupla (soma dos responsáveis atuais das pastas desta carteira) ──
-  function _totaisDupla(d) {
-    // Pastas desta carteira (titular original = d.tit)
-    const rdataE = Object.entries(KANBAN_DATA.responsaveis).find(([,v])=>v.short===d.tit);
-    if(!rdataE) return {c:0, aj:0};
-    const pastas = Object.values(rdataE[1].sections).flat();
-    const hoje = new Date(), d0 = hoje.getDay()===0?6:hoje.getDay()-1;
-    const ini = new Date(hoje); ini.setDate(hoje.getDate()-d0); ini.setHours(0,0,0,0);
-    // Conta contatos e ajuizamentos feitos por QUALQUER membro da dupla nas pastas desta carteira
-    const membros = [d.tit, d.cx, d.est];
-    const pastaSet = new Set(pastas.map(p=>String(p.pasta)));
-    let c=0, aj=0;
-    for(const item of (_logCache.entries||[])) {
-      if(!item.ts || !item.resp || !item.pasta) continue;
-      if(new Date(item.ts) < ini) continue;
-      if(!membros.includes(item.resp)) continue;
-      if(!pastaSet.has(String(item.pasta))) continue;
-      if(item.type==='contato') c++;
-      else if(item.type==='ajuizado') aj++;
-    }
-    return {c, aj};
-  }
-
-  // ── Gera HTML ──────────────────────────────────────────────────────
-  let html = '';
-
-  for(const d of DUPLAS) {
-    const rdataE = Object.entries(KANBAN_DATA.responsaveis).find(([,v])=>v.short===d.tit);
-    const rdata  = rdataE?.[1];
-    const ativas = rdata ? Object.values(rdata.sections).flat()
-      .filter(c=>!DONE.includes(getClientState(c.pasta).status||'')).length : 0;
-
-    const tot = _totaisDupla(d);
-    const cTotal = tot.c, ajTotal = tot.aj;
-
-    const semDup = (() => {
-      const pairs = [[cTotal,mDupla.contatos],[ajTotal,mDupla.ajuizamentos]].filter(([,m])=>m>0);
-      if(!pairs.length) return '⚪';
-      const ok = pairs.filter(([v,m])=>v>=m).length;
-      return ok===pairs.length?'🟢':ok>0?'🟡':'🔴';
-    })();
-
-    // Membros da dupla com suas contribuições individuais
-    const membros = [
-      { short:d.tit,  label:'Titular',    bg:'',                    cor:'var(--text)' },
-      { short:d.cx,   label:'CX',         bg:'var(--surface2)',      cor:'var(--text)' },
-      { short:d.est,  label:'Estagiário', bg:'#EEEDFE',              cor:'#3C3489'     },
-    ];
-
-    html += `
-<div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);overflow:hidden;margin-bottom:18px;box-shadow:var(--shadow);">
-
-  <!-- Cabeçalho da dupla -->
-  <div style="background:var(--accent);padding:12px 18px;display:flex;align-items:flex-start;justify-content:space-between;gap:16px;flex-wrap:wrap;">
-    <div>
-      <div style="color:#fff;font-weight:700;font-size:15px;">⚖️ ${d.tit} + ${d.cx}
-        <span style="font-size:11px;font-weight:400;opacity:.6;margin-left:8px;">Est: ${d.est}</span>
-      </div>
-      <div style="color:rgba(255,255,255,.55);font-size:11px;margin-top:2px;">${ativas} pastas ativas na carteira</div>
-    </div>
-    <div style="display:flex;gap:24px;align-items:flex-start;">
-      <div style="text-align:center;">
-        <div style="color:rgba(255,255,255,.7);font-size:10px;text-transform:uppercase;letter-spacing:.05em;">Contatos dupla</div>
-        <div style="color:#fff;font-family:'DM Serif Display';font-size:26px;line-height:1.1;">${cTotal}<span style="font-size:12px;opacity:.5;">/${mDupla.contatos}</span></div>
-        ${_bar(cTotal,mDupla.contatos)}
-      </div>
-      <div style="text-align:center;">
-        <div style="color:rgba(255,255,255,.7);font-size:10px;text-transform:uppercase;letter-spacing:.05em;">Ajuizamentos</div>
-        <div style="color:#fff;font-family:'DM Serif Display';font-size:26px;line-height:1.1;">${ajTotal}<span style="font-size:12px;opacity:.5;">/${mDupla.ajuizamentos}</span></div>
-        ${_bar(ajTotal,mDupla.ajuizamentos)}
-      </div>
-      <div style="font-size:32px;line-height:1;align-self:center;">${semDup}</div>
-    </div>
-  </div>
-
-  <!-- Tabela por responsável -->
-  <table style="width:100%;border-collapse:collapse;font-size:12px;">
-    <thead>
-      <tr style="background:var(--surface2);">
-        <th style="padding:7px 14px;text-align:left;font-size:11px;font-weight:600;color:var(--text3);min-width:140px;">Responsável</th>
-        <th style="padding:7px 12px;text-align:center;font-size:11px;font-weight:600;color:var(--text3);">Pastas<br><span style="font-size:9px;font-weight:400;">sob responsabilidade</span></th>
-        <th style="padding:7px 12px;text-align:center;font-size:11px;font-weight:600;color:var(--text3);">Contatos<br><span style="font-size:9px;font-weight:400;">feitos esta semana</span></th>
-        <th style="padding:7px 12px;text-align:center;font-size:11px;font-weight:600;color:var(--text3);">Ajuizamentos<br><span style="font-size:9px;font-weight:400;">feitos esta semana</span></th>
-        <th style="padding:7px 12px;text-align:center;font-size:11px;font-weight:600;color:var(--text3);">Status</th>
-      </tr>
-    </thead>
-    <tbody>
-    ${membros.map(m => {
-      const r = realizado[m.short] || {};
-      const pastasResp = r.delegadas || 0;
-      const cM  = realizado[m.short]?.contatos || 0;
-      const ajM = realizado[m.short]?.ajuizamentos || 0;
-      return `<tr style="border-bottom:1px solid var(--border);${m.bg?'background:'+m.bg+';':''}">
-        <td style="padding:10px 14px;">
-          <div style="font-weight:700;font-size:13px;color:${m.cor};">${m.short}</div>
-          <div style="font-size:10px;color:var(--text3);">${m.label}</div>
-        </td>
-        <td style="padding:10px;text-align:center;">${_contrib(pastasResp)}</td>
-        <td style="padding:10px;text-align:center;">${_contrib(cM)}</td>
-        <td style="padding:10px;text-align:center;">${_contrib(ajM)}</td>
-        <td style="padding:10px;text-align:center;">${_semTag(cM+ajM, (mDupla.contatos||0)+(mDupla.ajuizamentos||0))}</td>
-      </tr>`;
-    }).join('')}
-    </tbody>
-  </table>
-</div>`;
-  }
-
-  document.getElementById('metas-body').innerHTML = html;
-} // fecha renderMetasPanel
 
 function buildSummarySheet() {
   const ws = {};
@@ -3641,7 +3480,7 @@ function exportarXLSX() {
       const wb_new = XLSX.utils.book_new();
 
       // Dashboard
-      XLSX.utils.book_append_sheet(wb_new, buildDashSheet(), '📊 Dashboard');
+      XLSX.utils.book_append_sheet(wb_new, buildSummarySheet(), '📊 Dashboard');
 
       // Responsible sheets
       Object.entries(KANBAN_DATA.responsaveis).forEach(([rname, rdata])=>{
@@ -4897,7 +4736,12 @@ async function _recalcularEstatisticas() {
     const ref = db.collection('sistema').doc('estatisticas_' + short);
     batch.set(ref, { ...data, recalculadoEm: new Date().toISOString() }, { merge: true });
   }
-  await batch.commit().catch(e => { notify('Erro ao salvar: ' + e.message); return; });
+  try {
+    await batch.commit();
+  } catch(e) {
+    notify('Erro ao salvar: ' + e.message);
+    return;
+  }
 
   notify('✅ Estatísticas recalculadas com sucesso!');
   _carregarDesempenho();
@@ -6177,6 +6021,11 @@ async function _init() {
     else btnRanking.style.display = 'none';
   }
   // Ranking — visível apenas para gestores já tratado acima
+
+  // Event listeners de modais — registrados aqui pois o DOM já existe
+  document.getElementById('checklist-modal')?.addEventListener('click', e => { if(e.target===document.getElementById('checklist-modal')) closeChecklist(); });
+  document.getElementById('list-modal')?.addEventListener('click', e => { if(e.target===document.getElementById('list-modal')) closeListModal(); });
+  document.getElementById('transfer-modal')?.addEventListener('click', e => { if(e.target===document.getElementById('transfer-modal')) closeTransfer(); });
 
   renderDashboard();
   renderActivityLog();
