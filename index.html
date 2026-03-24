@@ -270,8 +270,16 @@ function subscribeToRealtime() {
     let hasExternalChange = false;
     snapshot.docChanges().forEach(change => {
       if(change.type === 'modified' || change.type === 'added') {
-        _stateCache[change.doc.id] = change.doc.data();
-        hasExternalChange = true;
+        const incoming = change.doc.data();
+        const current  = _stateCache[change.doc.id];
+        // Só sobrescreve se o dado do Firestore é mais recente que o cache local
+        // Evita race condition: save local → onSnapshot com versão antiga
+        const incomingTs = incoming?.updatedAt || '';
+        const currentTs  = current?.updatedAt  || '';
+        if(!current || incomingTs >= currentTs) {
+          _stateCache[change.doc.id] = incoming;
+          hasExternalChange = true;
+        }
       }
     });
     // Só re-renderiza se não houver modal aberto (evita duplicação/flicker)
@@ -461,6 +469,7 @@ body { font-family: "DM Sans", sans-serif; background: var(--bg); color: var(--t
 .client-fase.leva1 { background: var(--red-bg); color: var(--red); }
 .client-fase.prep { background: var(--purple-bg); color: var(--purple); }
 .client-fase.triagem { background: var(--yellow-bg); color: var(--yellow); }
+.client-fase.analisada { background: var(--blue-bg); color: var(--blue); }
 .client-fase.ajuizado { background: var(--green-bg); color: var(--green); }
 .client-fase.incomunicavel { background: var(--surface2); color: var(--text3); }
 .client-fase.encerrado { background: var(--surface2); color: var(--text3); }
@@ -1378,6 +1387,7 @@ body { font-family: "DM Sans", sans-serif; background: var(--bg); color: var(--t
               <option value="" disabled>— Selecione o status —</option>
               <option value="em_contato">Em Contato</option>
               <option value="aguardando_ajuizamento">Aguardando Ajuizamento</option>
+              <option value="analisada">Pasta Analisada — Pendente de Ajuizamento</option>
               <option value="ajuizado">Ajuizado</option>
               <option value="incomunicavel">Incomunicável — Aguardando Gestor</option>
               <option value="reativado">Reativado</option>
@@ -1410,7 +1420,7 @@ body { font-family: "DM Sans", sans-serif; background: var(--bg); color: var(--t
         <div class="contact-steps">
           <!-- WhatsApp 1 -->
           <div class="contact-step" id="step-whats1">
-            <div class="step-check" id="check-whats1" onclick="toggleStep('whats1')">✓</div>
+            <div class="step-check" id="check-whats1" onclick="toggleStep('whats1')"></div>
             <div class="step-info">
               <div class="step-title">📱 WhatsApp — 1ª tentativa (Dia 0)</div>
               <div class="step-desc">Mensagem inicial — qualquer horário</div>
@@ -1426,7 +1436,7 @@ body { font-family: "DM Sans", sans-serif; background: var(--bg); color: var(--t
           </div>
           <!-- WhatsApp 2 -->
           <div class="contact-step" id="step-whats2">
-            <div class="step-check" id="check-whats2" onclick="toggleStep('whats2')">✓</div>
+            <div class="step-check" id="check-whats2" onclick="toggleStep('whats2')"></div>
             <div class="step-info">
               <div class="step-title">📱 WhatsApp — 2ª tentativa (Dia 2)</div>
               <div class="step-desc">Horário diferente da 1ª tentativa</div>
@@ -1442,7 +1452,7 @@ body { font-family: "DM Sans", sans-serif; background: var(--bg); color: var(--t
           </div>
           <!-- WhatsApp 3 -->
           <div class="contact-step" id="step-whats3">
-            <div class="step-check" id="check-whats3" onclick="toggleStep('whats3')">✓</div>
+            <div class="step-check" id="check-whats3" onclick="toggleStep('whats3')"></div>
             <div class="step-info">
               <div class="step-title">📱 WhatsApp — 3ª tentativa (Dia 4)</div>
               <div class="step-desc">Terceiro horário distinto + último registro</div>
@@ -1458,7 +1468,7 @@ body { font-family: "DM Sans", sans-serif; background: var(--bg); color: var(--t
           </div>
           <!-- Ligação -->
           <div class="contact-step" id="step-ligacao">
-            <div class="step-check" id="check-ligacao" onclick="toggleStep('ligacao')">✓</div>
+            <div class="step-check" id="check-ligacao" onclick="toggleStep('ligacao')"></div>
             <div class="step-info">
               <div class="step-title">📞 Ligação (Dia 6)</div>
               <div class="step-desc">Chamada telefônica — registrar resultado</div>
@@ -1467,7 +1477,7 @@ body { font-family: "DM Sans", sans-serif; background: var(--bg); color: var(--t
           </div>
           <!-- Email -->
           <div class="contact-step" id="step-email">
-            <div class="step-check" id="check-email" onclick="toggleStep('email')">✓</div>
+            <div class="step-check" id="check-email" onclick="toggleStep('email')"></div>
             <div class="step-info">
               <div class="step-title">📧 E-mail (Dia 10)</div>
               <div class="step-desc">E-mail formal com prazo de resposta</div>
@@ -1476,7 +1486,7 @@ body { font-family: "DM Sans", sans-serif; background: var(--bg); color: var(--t
           </div>
           <!-- Lenmit -->
           <div class="contact-step" id="step-lenmit">
-            <div class="step-check" id="check-lenmit" onclick="toggleStep('lenmit')">✓</div>
+            <div class="step-check" id="check-lenmit" onclick="toggleStep('lenmit')"></div>
             <div class="step-info">
               <div class="step-title">🔍 Pesquisa Lenmit (Dia 12)</div>
               <div class="step-desc">Busca de novos contatos no sistema Lenmit</div>
@@ -1485,7 +1495,7 @@ body { font-family: "DM Sans", sans-serif; background: var(--bg); color: var(--t
           </div>
           <!-- Outros -->
           <div class="contact-step" id="step-outros">
-            <div class="step-check" id="check-outros" onclick="toggleStep('outros')">✓</div>
+            <div class="step-check" id="check-outros" onclick="toggleStep('outros')"></div>
             <div class="step-info">
               <div class="step-title">🔗 Outros Contatos</div>
               <div class="step-desc">Familiares, vizinhos, referências cadastradas</div>
@@ -1564,13 +1574,20 @@ const ALL_STEPS = ['whats1','whats2','whats3','ligacao','email','lenmit','outros
 
 // ==================== STORAGE ====================
 function getClientState(pasta) {
-  // Lê do cache local (populado pelo Firestore ou localStorage fallback)
-  if(_firestoreReady) {
-    return _stateCache[String(pasta)] || {status:'em_contato', obs:'', steps:{}, dates:{}, prints:{}};
+  const key = String(pasta);
+  // Firestore cache tem prioridade quando disponível
+  if(_firestoreReady && _stateCache[key]) {
+    return _stateCache[key];
   }
+  // Fallback: localStorage (salvo sincronamente por setClientState)
   try {
-    const raw = localStorage.getItem('lpdb_c_' + pasta);
-    if(raw) return JSON.parse(raw);
+    const raw = localStorage.getItem('lpdb_c_' + key);
+    if(raw) {
+      const parsed = JSON.parse(raw);
+      // Se Firestore está pronto, popula o cache para próximas leituras
+      if(_firestoreReady) _stateCache[key] = parsed;
+      return parsed;
+    }
   } catch {}
   return {status:'em_contato', obs:'', steps:{}, dates:{}, prints:{}};
 }
@@ -1982,6 +1999,7 @@ const FASE_LABELS = {
   administrativa_2inst:    { label: 'Adm. 2ª Instância',   cls: 'adm2' },
   aguardando_providencia:  { label: 'Aguard. Providência',  cls: 'aguard-prov' },
   aguardando_autorizacao:  { label: 'Aguard. Autorização',  cls: 'aguard-aut' },
+  analisada:               { label: 'Analisada',            cls: 'analisada' },
   ajuizado:                { label: 'Ajuizado',             cls: 'ajuizado' },
   incomunicavel:           { label: 'Incomunicável',         cls: 'incomunicavel' },
   encerrado:               { label: 'Encerrado',             cls: 'encerrado' },
@@ -2670,23 +2688,33 @@ const DOC_ITEMS = [
 
 function getDocs(pasta) {
   const cs = getClientState(pasta);
-  // Retorna cópia profunda para evitar mutação direta do _stateCache
-  return JSON.parse(JSON.stringify(cs.docs || {}));
+  return Object.assign({}, cs.docs || {});
 }
 function saveDocs(pasta, docs) {
   const cs = getClientState(pasta);
-  cs.docs = docs;
-  setClientState(pasta, cs);
+  const updated = { ...cs, docs: docs, updatedAt: new Date().toISOString() };
+  setClientState(pasta, updated);
+  notifySave();
 }
+
+// ==================== NOTIFY SAVE ====================
+function notifySave() {
+  const n = document.getElementById('notif');
+  if(!n) return;
+  n.textContent = '✅ Alterações salvas na pasta';
+  n.classList.add('show');
+  setTimeout(() => n.classList.remove('show'), 2000);
+}
+// ==================== FIM NOTIFY SAVE ====================
+
 function toggleDoc(pasta, docId) {
   const docs = getDocs(pasta);
   docs[docId] = docs[docId] || {};
   docs[docId].checked = !docs[docId].checked;
   if(docs[docId].checked && !docs[docId].date) {
-    const today = new Date().toISOString().split('T')[0];
-    docs[docId].date = today;
-    const el = document.getElementById('docdate-'+docId);
-    if(el) el.value = today;
+    docs[docId].date = new Date().toISOString().split('T')[0];
+    const el = document.getElementById('docdate-' + docId);
+    if(el) el.value = docs[docId].date;
   }
   saveDocs(pasta, docs);
   renderDocChecklist(pasta);
@@ -5246,10 +5274,9 @@ function toggleStep(step) {
   } else {
     stepDiv.classList.add('done');
     if(checkDiv) { checkDiv.classList.add('checked'); checkDiv.textContent = '✓'; }
-    // Registra data automática se ainda não tiver
     const dateEl = document.getElementById('date-' + step);
     if(dateEl && !dateEl.value) {
-      dateEl.value = new Date().toISOString().slice(0,10);
+      dateEl.value = new Date().toISOString().slice(0, 10);
     }
   }
   saveChecklist();
@@ -5285,7 +5312,7 @@ function saveChecklist() {
 
   if(newStatus !== prevStatus) {
     const faseLabel = {
-      ajuizado:'→ Ajuizado', incomunicavel:'→ Incomunicável',
+      analisada:'→ Analisada', ajuizado:'→ Ajuizado', incomunicavel:'→ Incomunicável',
       em_contato:'→ Em Contato', reativado:'→ Reativado',
       encerrado:'→ Encerrado', aguardando_ajuizamento:'→ Aguard. Ajuizamento'
     }[newStatus] || newStatus;
@@ -5314,61 +5341,10 @@ function saveChecklist() {
       _incrementarEstatistica({ type: 'contato', resp: _executor });
     }
   }
-}
-
-function saveChecklist() {
-  const client = currentChecklistClient;
-  if(!client) return;
-  const pasta = client.pasta;
-  const cs = getClientState(pasta);
-
-  const newStatus = document.getElementById('cl-status')?.value || cs.status || '';
-  const newObs    = document.getElementById('cl-obs')?.value    || cs.obs    || '';
-
-  // Steps
-  const steps = { ...cs.steps };
-  ALL_STEPS.forEach(step => {
-    const el = document.getElementById('step-' + step);
-    if(el) steps[step] = el.checked;
-  });
-
-  // Datas dos contatos
-  const dates = { ...cs.dates };
-  ['whats1','whats2','whats3'].forEach(step => {
-    const el = document.getElementById('date-' + step);
-    if(el) dates[step] = el.value;
-  });
-
-  const titOriginal = Object.values(KANBAN_DATA.responsaveis)
-    .find(r => Object.values(r.sections).flat().some(p => p.pasta == pasta))?.short || '';
-  const exec = _currentUser?.shortName || titOriginal;
-
-  const prevStatus = cs.status || '';
-  const updated = { ...cs, status: newStatus, obs: newObs, steps, dates, updatedAt: new Date().toISOString() };
-  setClientState(pasta, updated);
-
-  // Registra no log se status mudou
-  if(newStatus && newStatus !== prevStatus) {
-    const labelMap = {
-      ajuizado: 'Ajuizado', incomunicavel: 'Incomunicável', encerrado: 'Encerrado',
-      reativado: 'Reativado', em_contato: 'Em Contato', aguardando_ajuizamento: 'Aguard. Ajuizamento'
-    };
-    addActivityLog({
-      type: newStatus,
-      pasta, nome: client.nome,
-      resp: exec, titular: titOriginal,
-      fase: `→ ${labelMap[newStatus] || newStatus}`
-    });
-    _incrementarEstatistica({ type: newStatus, resp: exec });
-    notify(`✅ Status: ${labelMap[newStatus] || newStatus}`);
-    renderKanban();
-    renderIncom();
-  }
+  notifySave();
 }
 
 function closeChecklist() {
-  // Salva estado atual antes de fechar
-  try { saveChecklist(); } catch(e) {}
   document.getElementById('checklist-modal').classList.remove('open');
   currentChecklistClient = null;
   renderKanban();
